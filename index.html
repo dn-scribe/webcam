@@ -58,6 +58,13 @@
         <label>Frame rate <select id="selFps"><option>15</option><option>24</option><option>30</option><option>60</option></select></label>
         <label class="row"><input id="chkAudio" type="checkbox"> Record microphone</label>
       </div>
+      <h4>Recording (compression)</h4>
+      <div class="grid">
+        <label>Quality / bitrate
+          <select id="selBitrate"><option value="low">Low — 1 Mbps (~7 MB/min)</option><option value="medium">Medium — 2.5 Mbps (~19 MB/min)</option><option value="high">High — 5 Mbps (~38 MB/min)</option><option value="max">Max — 10 Mbps (~75 MB/min)</option></select></label>
+        <label>Codec
+          <select id="selCodec"><option value="auto">Auto (H.264 mp4 if available)</option><option value="h264">H.264 · mp4 (plays everywhere)</option><option value="vp9">VP9 · webm (smaller files)</option></select></label>
+      </div>
       <h4>Device controls</h4>
       <div id="advControls" class="grid"><p class="hint">Start the camera to see controls.</p></div>
     </details>
@@ -71,6 +78,13 @@
         <label>JPEG quality <input id="stQual" type="range" min="0.1" max="1" step="0.05" value="0.6"></label>
         <label>Snapshot quality <input id="snQual" type="range" min="0.5" max="1" step="0.01" value="0.92"></label>
       </div>
+    </details>
+
+    <details id="pRecs">
+      <summary>Recordings <span id="recCount"></span></summary>
+      <p id="storInfo" class="hint"></p>
+      <div id="recList"></div>
+      <p class="hint">Recordings are written to the phone’s app storage while recording, so they survive a crash or app kill. ⬇ saves to Downloads, ↗ shares to Files/Drive/other apps.</p>
     </details>
 
     <details id="pGal">

@@ -33,3 +33,4 @@ h4{margin:4px 0 8px;color:var(--dim);font-size:13px;text-transform:uppercase;let
 .gallery{display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:8px;padding-bottom:12px}
 .gallery a{display:block;position:relative}
 .gallery img{width:100%;aspect-ratio:4/3;object-fit:cover;border-radius:8px;display:block}
+.rec-row{display:flex;gap:6px;align-items:center;padding:6px 0;border-top:1px solid var(--line)}.rec-row span{flex:1;font-size:13px;overflow-wrap:anywhere}.rec-row button{padding:6px 10px}

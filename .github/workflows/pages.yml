@@ -25,6 +25,7 @@ jobs:
           mkdir _site
           cp -r index.html style.css app.js sw.js version.js manifest.webmanifest icons .nojekyll _site/
       - uses: actions/configure-pages@v5
+        with: { enablement: true }
       - uses: actions/upload-pages-artifact@v3
         with: { path: _site }
       - id: deployment

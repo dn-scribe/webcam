@@ -8,13 +8,14 @@ const video = $('#video');
 
 // ---------- settings ----------
 const DEFAULTS = {
-  facing: 'environment', deviceId: '', res: '1280x720', fps: 30, audio: false,
+  facing: 'environment', deviceId: '', res: '1280x720', fps: 30, audio: false, bitrate: 'medium', codec: 'auto',
   streamOn: false, streamFps: 10, streamWidth: 640, streamQuality: 0.6, snapQuality: 0.92,
   adv: {},
   hub: { host: '', port: 8765, token: '', tls: true, auto: true, name: 'phone' },
 };
 const CAMERA_KEYS = ['facing', 'deviceId', 'res', 'fps', 'audio'];
 const STREAM_KEYS = ['streamFps', 'streamWidth', 'streamQuality', 'snapQuality'];
+const REC_KEYS = ['bitrate', 'codec'];
 let S = load();
 function load() {
   try { const j = JSON.parse(localStorage.getItem('webcam.settings') || '{}');
@@ -85,10 +86,11 @@ async function applySettings(p) {
     cam.forEach((k) => (S[k] = p[k])); restart = true;
   }
   for (const k of STREAM_KEYS) if (k in p) S[k] = Number(p[k]);
+  for (const k of REC_KEYS) if (k in p) S[k] = String(p[k]);
   if ('streamOn' in p) S.streamOn = !!p.streamOn;
   if (restart) await startCamera();
   for (const [k, v] of Object.entries(p)) {
-    if (CAMERA_KEYS.includes(k) || STREAM_KEYS.includes(k) || ['width', 'height', 'streamOn', 'res'].includes(k)) continue;
+    if (CAMERA_KEYS.includes(k) || STREAM_KEYS.includes(k) || REC_KEYS.includes(k) || ['width', 'height', 'streamOn', 'res'].includes(k)) continue;
     if (k in caps) await applyAdv(k, v);
   }
   save(); syncUI(); updateCamInfo(); streamLoop(); sendState();
@@ -128,7 +130,7 @@ function buildUI() {
   if (!n) box.innerHTML = '<p class="hint">This camera/browser exposes no extra controls.</p>';
 }
 function syncUI() {
-  $('#selRes').value = S.res; $('#selFps').value = String(S.fps); $('#chkAudio').checked = S.audio;
+  $('#selRes').value = S.res; $('#selFps').value = String(S.fps); $('#selBitrate').value = S.bitrate; $('#selCodec').value = S.codec; $('#chkAudio').checked = S.audio;
   $('#chkStream').checked = S.streamOn; $('#stFps').value = S.streamFps; $('#stWidth').value = S.streamWidth;
   $('#stQual').value = S.streamQuality; $('#snQual').value = S.snapQuality;
 }
@@ -181,25 +183,58 @@ function streamLoop() {
   streamTimer = setTimeout(streamLoop, period);
 }
 
-// ---------- recording ----------
-let recorder = null, recChunks = [], recSize = 0, recStart = 0, recTick, lastRec = null, recSeq = 0;
+// ---------- recording (chunks persisted to IndexedDB, not RAM) ----------
+const BITRATES = { low: 1e6, medium: 2.5e6, high: 5e6, max: 10e6 };
+let recorder = null, recSize = 0, recStart = 0, recTick, lastRec = null, recId = 0, recWrites = [], recMem = [];
+let recs = [];   // finished recordings' metadata, newest first
+
+const idb = (() => {
+  let dbp;
+  const open = () => dbp || (dbp = new Promise((res, rej) => {
+    const r = indexedDB.open('webcam', 1);
+    r.onupgradeneeded = () => { r.result.createObjectStore('chunks', { keyPath: ['rec', 'idx'] }); r.result.createObjectStore('recs', { keyPath: 'id' }); };
+    r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+  }));
+  const run = async (store, mode, fn) => { const db = await open(); return new Promise((res, rej) => {
+    const tx = db.transaction(store, mode), st = tx.objectStore(store), out = fn(st);
+    tx.oncomplete = () => res(out && 'result' in out ? out.result : undefined); tx.onerror = () => rej(tx.error); }); };
+  return {
+    put: (store, v) => run(store, 'readwrite', (st) => st.put(v)),
+    all: (store) => run(store, 'readonly', (st) => st.getAll()),
+    chunks: (rec) => run('chunks', 'readonly', (st) => st.getAll(IDBKeyRange.bound([rec, 0], [rec, Infinity]))),
+    del: async (rec) => { await run('chunks', 'readwrite', (st) => st.delete(IDBKeyRange.bound([rec, 0], [rec, Infinity]))); await run('recs', 'readwrite', (st) => st.delete(rec)); },
+  };
+})();
+async function recBlob(meta) {
+  const parts = (await idb.chunks(meta.id)).map((c) => c.blob);
+  return new Blob(parts, { type: meta.type });
+}
 function pickMime() {
-  const c = ['video/mp4;codecs=avc1', 'video/mp4', 'video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm'];
-  return c.find((m) => window.MediaRecorder && MediaRecorder.isTypeSupported(m)) || '';
+  const h264 = ['video/mp4;codecs=avc1', 'video/mp4'], vp9 = ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm'];
+  const order = S.codec === 'vp9' ? [...vp9, ...h264] : S.codec === 'h264' ? [...h264, ...vp9] : [...h264, ...vp9];
+  return order.find((m) => window.MediaRecorder && MediaRecorder.isTypeSupported(m)) || '';
 }
 function startRec() {
   if (recorder || !stream) return 'not ready';
   if (!window.MediaRecorder) return 'MediaRecorder unsupported';
   const mime = pickMime();
-  recChunks = []; recSize = 0;
-  recorder = new MediaRecorder(stream, mime ? { mimeType: mime, videoBitsPerSecond: 8e6 } : {});
-  recorder.ondataavailable = (e) => { if (e.data.size) { recChunks.push(e.data); recSize += e.data.size; } };
-  recorder.onstop = () => {
+  recSize = 0; recWrites = []; recMem = []; recId = Math.floor(Date.now() / 1000);
+  const id = recId; let idx = 0;
+  recorder = new MediaRecorder(stream, { ...(mime && { mimeType: mime }), videoBitsPerSecond: BITRATES[S.bitrate] || BITRATES.medium, audioBitsPerSecond: 96000 });
+  recorder.ondataavailable = (e) => {
+    if (!e.data.size) return;
+    recSize += e.data.size; const i = idx++;
+    recWrites.push(idb.put('chunks', { rec: id, idx: i, blob: e.data }).catch(() => recMem.push({ rec: id, idx: i, blob: e.data })));
+  };
+  recorder.onstop = async () => {
     clearInterval(recTick);
-    const type = recorder.mimeType || mime || 'video/webm';
-    const ext = type.includes('mp4') ? 'mp4' : 'webm';
-    lastRec = { blob: new Blob(recChunks, { type }), type, name: `rec-${stamp()}.${ext}`, id: ++recSeq, secs: (Date.now() - recStart) / 1000 };
-    recChunks = []; recorder = null; recUI(); reportRec(); toast(`Recorded ${(lastRec.blob.size / 1e6).toFixed(1)} MB`);
+    const type = recorder.mimeType || mime || 'video/webm', started = recStart;
+    recorder = null; recUI();
+    await Promise.all(recWrites);
+    const meta = { id, type, name: `rec-${stamp()}.${type.includes('mp4') ? 'mp4' : 'webm'}`, size: recSize, secs: (Date.now() - started) / 1000, ts: Date.now() };
+    if (recMem.length) { meta.mem = new Blob(recMem.sort((a, b) => a.idx - b.idx).map((c) => c.blob), { type }); }  // IndexedDB failed: keep in RAM
+    else await idb.put('recs', meta).catch(() => {});
+    recs.unshift(meta); lastRec = meta; recUI(); renderRecs(); reportRec(); toast(`Recorded ${(meta.size / 1e6).toFixed(1)} MB`); storageInfo();
   };
   recorder.start(1000); recStart = Date.now();
   recTick = setInterval(() => { recUI(); reportRec(); }, 1000);
@@ -214,23 +249,66 @@ function recUI() {
   $('#recBadge').hidden = !on;
   const s = Math.floor((Date.now() - recStart) / 1000); $('#recTime').textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
   $('#btnDl').disabled = !lastRec || on;
-  ['selDevice', 'selRes', 'selFps', 'chkAudio', 'btnFlip'].forEach((i) => ($('#' + i).disabled = on));
+  ['selDevice', 'selRes', 'selFps', 'chkAudio', 'btnFlip', 'selBitrate', 'selCodec'].forEach((i) => ($('#' + i).disabled = on));
 }
-function reportRec() {
-  sendJSON({ t: 'rec_status', ...recStatus() });
-}
-const recStatus = () => ({ state: recorder ? 'recording' : 'idle', elapsed: recorder ? (Date.now() - recStart) / 1000 : 0, size: recSize, last: lastRec && { id: lastRec.id, size: lastRec.blob.size, name: lastRec.name } });
-async function sendRecording() {
-  if (!lastRec) throw new Error('no recording');
-  const CH = 256 * 1024; let idx = 0;
-  for (let off = 0; off < lastRec.blob.size; off += CH, idx++) {
+function reportRec() { sendJSON({ t: 'rec_status', ...recStatus() }); }
+const recStatus = () => ({ state: recorder ? 'recording' : 'idle', elapsed: recorder ? (Date.now() - recStart) / 1000 : 0, size: recSize, last: lastRec && { id: lastRec.id, size: lastRec.size, name: lastRec.name } });
+const blobOf = (meta) => (meta.mem ? Promise.resolve(meta.mem) : recBlob(meta));
+async function sendRecording(id) {
+  const meta = recs.find((r) => r.id === id) || lastRec;
+  if (!meta) throw new Error('no recording');
+  const blob = await blobOf(meta), CH = 256 * 1024; let idx = 0;
+  for (let off = 0; off < blob.size; off += CH, idx++) {
     while (wsOpen() && ws.bufferedAmount > 2 * CH) await new Promise((r) => setTimeout(r, 20));
     if (!wsOpen()) throw new Error('disconnected');
     const head = new Uint8Array(9); head[0] = 3;
-    const dv = new DataView(head.buffer); dv.setUint32(1, lastRec.id); dv.setUint32(5, idx);
-    ws.send(new Blob([head, lastRec.blob.slice(off, off + CH)]));
+    const dv = new DataView(head.buffer); dv.setUint32(1, meta.id); dv.setUint32(5, idx);
+    ws.send(new Blob([head, blob.slice(off, off + CH)]));
   }
-  sendJSON({ t: 'rec_file_end', id: lastRec.id, size: lastRec.blob.size, mime: lastRec.type, chunks: idx, name: lastRec.name });
+  sendJSON({ t: 'rec_file_end', id: meta.id, size: blob.size, mime: meta.type, chunks: idx, name: meta.name });
+}
+async function shareRec(meta) {
+  const file = new File([await blobOf(meta)], meta.name, { type: meta.type });
+  if (navigator.canShare && navigator.canShare({ files: [file] })) await navigator.share({ files: [file], title: meta.name });
+  else toast('Sharing files is not supported here — use Download');
+}
+async function deleteRec(meta) {
+  await idb.del(meta.id).catch(() => {}); recs = recs.filter((r) => r !== meta);
+  if (lastRec === meta) lastRec = recs[0] || null;
+  renderRecs(); recUI(); storageInfo();
+}
+function renderRecs() {
+  const box = $('#recList'); box.innerHTML = '';
+  $('#recCount').textContent = recs.length ? `(${recs.length})` : '';
+  if (!recs.length) box.innerHTML = '<p class="hint">No recordings yet.</p>';
+  for (const r of recs) {
+    const row = document.createElement('div'); row.className = 'rec-row';
+    const info = document.createElement('span'); info.textContent = `${r.name} · ${Math.round(r.secs)}s · ${(r.size / 1e6).toFixed(1)} MB`;
+    const mk = (txt, fn) => Object.assign(document.createElement('button'), { textContent: txt, onclick: () => fn().catch((e) => e.name !== 'AbortError' && toast(String(e.message || e))) });
+    row.append(info, mk('⬇', async () => download(await blobOf(r), r.name)), mk('↗', () => shareRec(r)), mk('🗑', () => deleteRec(r)));
+    box.append(row);
+  }
+}
+async function storageInfo() {
+  try {
+    const e = await navigator.storage.estimate(); const persisted = navigator.storage.persisted ? await navigator.storage.persisted() : false;
+    $('#storInfo').textContent = `Phone storage: recordings use ${(recs.reduce((a, r) => a + r.size, 0) / 1e6).toFixed(0)} MB · app quota ${(e.usage / 1e6).toFixed(0)} / ${(e.quota / 1e9).toFixed(1)} GB${persisted ? ' · protected' : ''}`;
+  } catch {}
+}
+async function loadRecs() {
+  try {
+    if (navigator.storage && navigator.storage.persist) navigator.storage.persist();
+    const metas = await idb.all('recs'), have = new Set(metas.map((m) => m.id));
+    // recover recordings interrupted by a crash/kill: chunks exist but no metadata
+    const orphan = new Map();
+    for (const c of await idb.all('chunks')) if (!have.has(c.rec)) { const o = orphan.get(c.rec) || { size: 0, type: c.blob.type }; o.size += c.blob.size; orphan.set(c.rec, o); }
+    for (const [id, o] of orphan) {
+      const type = o.type || 'video/webm', m = { id, type, size: o.size, secs: 0, ts: id * 1000, name: `recovered-${id}.${type.includes('mp4') ? 'mp4' : 'webm'}` };
+      await idb.put('recs', m); metas.push(m);
+    }
+    recs = metas.sort((a, b) => b.ts - a.ts); lastRec = recs[0] || null;
+  } catch {}
+  renderRecs(); recUI(); storageInfo();
 }
 
 // ---------- hub connection ----------
@@ -288,8 +366,8 @@ async function onMessage(ev) {
         let e = null;
         if (m.action === 'start') e = startRec();
         else if (m.action === 'stop') stopRec();
-        else if (m.action === 'send') await sendRecording();
-        else if (m.action === 'discard') { lastRec = null; recUI(); }
+        else if (m.action === 'send') await sendRecording(m.id);
+        else if (m.action === 'discard') { const r = recs.find((x) => x.id === m.id) || lastRec; if (r) await deleteRec(r); }
         if (e) sendJSON({ t: 'error', id: m.id, msg: e });
         break;
       }
@@ -301,7 +379,7 @@ function sendState() {
   const st = track ? track.getSettings() : {};
   sendJSON({
     t: 'state', version: self.APP_VERSION, build: self.APP_BUILD,
-    settings: { facing: S.facing, deviceId: S.deviceId, res: S.res, fps: S.fps, audio: S.audio, streamFps: S.streamFps, streamWidth: S.streamWidth, streamQuality: S.streamQuality, snapQuality: S.snapQuality, ...S.adv },
+    settings: { facing: S.facing, deviceId: S.deviceId, res: S.res, fps: S.fps, audio: S.audio, bitrate: S.bitrate, codec: S.codec, streamFps: S.streamFps, streamWidth: S.streamWidth, streamQuality: S.streamQuality, snapQuality: S.snapQuality, ...S.adv },
     caps, devices: devices.map((d) => ({ id: d.deviceId, label: d.label })),
     video: { w: st.width, h: st.height, fps: st.frameRate }, recording: recStatus(), streaming: S.streamOn,
   });
@@ -358,7 +436,9 @@ function readHub() {
 
 $('#btnSnap').onclick = () => snap().then(({ name }) => toast('Saved ' + name)).catch((e) => toast(e.message));
 $('#btnRec').onclick = () => { if (recorder) stopRec(); else { const e = startRec(); if (e) toast(e); } };
-$('#btnDl').onclick = () => lastRec && download(lastRec.blob, lastRec.name);
+$('#btnDl').onclick = async () => lastRec && download(await blobOf(lastRec), lastRec.name);
+$('#selBitrate').onchange = (e) => applySettings({ bitrate: e.target.value });
+$('#selCodec').onchange = (e) => applySettings({ codec: e.target.value });
 $('#btnFlip').onclick = () => applySettings({ facing: S.facing === 'user' ? 'environment' : 'user', deviceId: '' });
 $('#selDevice').onchange = (e) => applySettings({ deviceId: e.target.value });
 $('#selRes').onchange = (e) => applySettings({ res: e.target.value });
@@ -374,7 +454,7 @@ $('#btnInstall').onclick = async () => { if (deferredInstall) { deferredInstall.
 
 (async function init() {
   const fromHash = readHash();
-  fillHub(); syncUI(); recUI(); await initSW();
+  fillHub(); syncUI(); recUI(); loadRecs(); await initSW();
   try { await startCamera(); } catch {}
   if (fromHash || (S.hub.host && S.hub.auto && localStorage.getItem('webcam.wasConnected') === '1')) { $('#btnConnect').textContent = 'Disconnect'; connect(); }
   window.webcam = { S, applySettings, snap, connect, disconnect }; // debugging / tests

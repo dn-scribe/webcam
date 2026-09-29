@@ -35,3 +35,6 @@ Snap · Record/Stop · Download last recording · Flip camera · resolution/fps/
 
 ## GitHub Pages
 Repo → Settings → Pages → Source: **GitHub Actions**. (`.github/workflows/pages.yml`)
+
+## Recordings & compression
+Recording chunks are written to the phone's IndexedDB while recording (crash-safe, not held in RAM; interrupted recordings are recovered on next launch). Quality/bitrate (1–10 Mbps) and codec (H.264 mp4 or smaller VP9 webm) are selectable in the app or via the hub (`set bitrate=low codec=vp9`). ⬇ downloads, ↗ shares to Files/Drive, 🗑 deletes.
