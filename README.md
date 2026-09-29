@@ -25,8 +25,11 @@ hub.rec_start(); ...; data, name = hub.rec_stop_and_fetch()
 ```
 Use `--cert/--key` (e.g. mkcert) for a trusted cert; `--serve-app` makes the hub serve the app itself (camera works, but no offline install because of the self-signed cert).
 
+## Browser viewer (mirror on the PC)
+The hub serves a page that mirrors the phone: `python python/webcam_hub.py --open` (or open `https://localhost:8765/view?token=<token>`, printed at start-up). It shows the live view, Snap / Record / Get-recording (downloads in the browser), and every camera, recording and stream setting, kept in sync both ways with the phone. The phone's preview stream is switched on automatically while a viewer is open. Keys: Space = snap, R = record. From Python: `hub.open_viewer()`.
+
 ## Phone UI
-Snap · Record/Stop · Download last recording · Flip camera · resolution/fps/mic · every zoom/torch/exposure/focus/white-balance control the device exposes · optional preview stream · snapshot gallery.
+Draggable, rotatable control toolbar and quick camera panel (zoom/torch/exposure/focus) with a ⛶ full-screen view; positions are remembered (App → Reset control layout). Snap · Record/Stop · Download last recording · Flip camera · resolution/fps/mic · every zoom/torch/exposure/focus/white-balance control the device exposes · optional preview stream · snapshot gallery.
 
 ## Versioning & offline
 * Version lives in `version.js`. `python tools/bump.py patch|minor|major` then push to `main`.

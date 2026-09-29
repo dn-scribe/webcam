@@ -30,6 +30,8 @@ import socket
 import ssl
 import struct
 import sys
+import webbrowser
+from urllib.parse import parse_qs, urlparse
 import threading
 from pathlib import Path
 
@@ -104,6 +106,9 @@ class Hub:
         self._waiters: dict = {}         # ("snap"|"rec", id) -> asyncio.Future
         self._rec_chunks: dict = {}      # id -> {idx: bytes}
         self._ready = threading.Event()
+        self._viewers: set = set()       # browser viewers connected to /ui
+        self._busy: set = set()          # viewers still sending a preview frame (frames are dropped for them)
+        self._auto_on = False            # hub switched the phone's stream on because a viewer is watching
 
     # ---------- lifecycle ----------
     @property
@@ -119,6 +124,14 @@ class Hub:
     def trust_url(self):
         return f"{'https' if self.tls else 'http'}://{self.ip}:{self.port}/"
 
+    @property
+    def viewer_url(self):
+        return f"{'https' if self.tls else 'http'}://localhost:{self.port}/view?token={self.token}"
+
+    def open_viewer(self):
+        """Open the browser viewer (mirrors the phone: live view + all controls) on this machine."""
+        webbrowser.open(self.viewer_url)
+
     def start(self):
         threading.Thread(target=lambda: asyncio.run(self._main()), daemon=True, name="webcam-hub").start()
         self._ready.wait(10)
@@ -129,7 +142,8 @@ class Hub:
     def print_banner(self):
         print(f"\nWebcam hub listening on {self.scheme}://{self.ip}:{self.port}   token: {self.token}")
         print(f"  1) On the phone (once, self-signed cert): open {self.trust_url} and accept the warning")
-        print(f"  2) Open the app: {self.connect_url}\n")
+        print(f"  2) Open the app: {self.connect_url}")
+        print(f"  3) Browser viewer (this PC): {self.viewer_url}\n")
         try:
             import qrcode
             q = qrcode.QRCode(border=1)
@@ -158,7 +172,7 @@ class Hub:
         """Plain HTTP(S) on the same port: /  -> status page (for cert trust); other paths -> app files."""
         if not self.quiet:
             print(f"[hub] {connection.remote_address[0]} -> {request.path.split('?')[0]}")
-        if request.path.split("?")[0] == "/ws":
+        if request.path.split("?")[0] in ("/ws", "/ui"):
             return None
         path = request.path.split("?")[0]
         if self.app_dir:
@@ -166,13 +180,20 @@ class Hub:
             if f.is_file() and self.app_dir in f.parents:
                 ctype = mimetypes.guess_type(f.name)[0] or "application/octet-stream"
                 return Response(200, "OK", Headers([("Content-Type", ctype), ("Cache-Control", "no-cache")]), f.read_bytes())
+        if path == "/favicon.ico":
+            return Response(204, "No Content", Headers(), b"")
+        if path == "/view":
+            page = (Path(__file__).parent / "viewer.html").read_bytes()
+            return Response(200, "OK", Headers([("Content-Type", "text/html; charset=utf-8"), ("Cache-Control", "no-cache")]), page)
         if path == "/":
-            body = f"<h1>Webcam hub OK</h1><p>Certificate accepted. Return to the app.</p><p>{self.connect_url}</p>".encode()
+            body = f"<h1>Webcam hub OK</h1><p>Certificate accepted. Return to the app.</p><p><a href='/view?token={self.token}'>Open browser viewer</a></p><p>{self.connect_url}</p>".encode()
             return Response(200, "OK", Headers([("Content-Type", "text/html")]), body)
         return Response(404, "Not Found", Headers(), b"not found")
 
     # ---------- socket handling ----------
     async def _handler(self, ws):
+        if ws.request.path.split("?")[0] == "/ui":
+            return await self._viewer(ws)
         try:
             hello = json.loads(await asyncio.wait_for(ws.recv(), 10))
         except Exception:
@@ -189,14 +210,22 @@ class Hub:
         self.state = {"name": hello.get("name")}
         await ws.send(json.dumps({"t": "welcome", "proto": PROTO}))
         self._phone_evt.set()
+        self._auto_on = False
+        await self._bcast(json.dumps({"t": "phone", "connected": True, "name": hello.get("name")}))
+        await self._auto_stream()
         if not self.quiet:
             print(f"[hub] phone connected: {hello.get('name')} (app v{hello.get('version')})")
         try:
             async for msg in ws:
                 if isinstance(msg, bytes):
                     self._binary(msg)
+                    if self._viewers:
+                        await self._bcast(msg, frame=msg[:1] == b"\x01")
                 else:
-                    self._json(json.loads(msg))
+                    m = json.loads(msg)
+                    self._json(m)
+                    if self._viewers:
+                        await self._bcast(msg)
         except Exception:
             pass
         finally:
@@ -205,6 +234,64 @@ class Hub:
                 self._phone_evt.clear()
                 if not self.quiet:
                     print("[hub] phone disconnected")
+                await self._bcast(json.dumps({"t": "phone", "connected": False}))
+
+    # ---------- browser viewer ----------
+    VIEWER_CMDS = {"set", "stream", "snap", "rec", "get_state"}
+
+    async def _bcast(self, data, frame=False):
+        for v in list(self._viewers):
+            if frame:      # never let a slow viewer stall the phone: drop frames while it is still busy
+                if v in self._busy:
+                    continue
+                self._busy.add(v)
+                asyncio.create_task(self._vsend(v, data, True))
+            else:
+                await self._vsend(v, data, False)
+
+    async def _vsend(self, v, data, frame):
+        try:
+            await asyncio.wait_for(v.send(data), 5)
+        except Exception:
+            pass
+        finally:
+            if frame:
+                self._busy.discard(v)
+
+    async def _auto_stream(self):
+        """Turn the phone's preview stream on while someone is watching, off when the last viewer leaves."""
+        if self._ws is None:
+            return
+        if self._viewers and not self._auto_on:
+            self._auto_on = True
+            await self._send({"t": "stream", "on": True, "fps": 10, "width": 960, "quality": 0.6})
+        elif not self._viewers and self._auto_on:
+            self._auto_on = False
+            await self._send({"t": "stream", "on": False})
+
+    async def _viewer(self, ws):
+        if parse_qs(urlparse(ws.request.path).query).get("token", [""])[0] != self.token:
+            await ws.close(4401, "bad token")
+            return
+        self._viewers.add(ws)
+        try:
+            await ws.send(json.dumps({"t": "phone", "connected": self.connected, "name": self.state.get("name")}))
+            if "caps" in self.state:
+                await ws.send(json.dumps({"t": "state", **self.state}))
+            await self._auto_stream()
+            async for msg in ws:
+                if isinstance(msg, str) and self._ws is not None:
+                    try:
+                        if json.loads(msg).get("t") in self.VIEWER_CMDS:
+                            await self._ws.send(msg)
+                    except ValueError:
+                        pass
+        except Exception:
+            pass
+        finally:
+            self._viewers.discard(ws)
+            self._busy.discard(ws)
+            await self._auto_stream()
 
     def _binary(self, b: bytes):
         kind = b[0]
@@ -327,6 +414,7 @@ def cli():
     ap.add_argument("--cert"); ap.add_argument("--key")
     ap.add_argument("--serve-app", nargs="?", const=str(Path(__file__).resolve().parent.parent),
                     help="also serve the PWA files from this dir (default: repo root)")
+    ap.add_argument("--open", action="store_true", help="open the browser viewer on this machine")
     ap.add_argument("--out", default=".", help="where snap/rec files are saved")
     a = ap.parse_args()
 
@@ -334,6 +422,8 @@ def cli():
     if a.serve_app:
         hub.app_url = f"{hub.trust_url}"
     hub.start()
+    if a.open:
+        hub.open_viewer()
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
     help_txt = ("commands: state | snap [quality] | rec start | rec stop | stream on|off [fps] | "

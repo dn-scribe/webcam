@@ -10,7 +10,7 @@ const video = $('#video');
 const DEFAULTS = {
   facing: 'environment', deviceId: '', res: '1280x720', fps: 30, audio: false, bitrate: 'medium', codec: 'auto',
   streamOn: false, streamFps: 10, streamWidth: 640, streamQuality: 0.6, snapQuality: 0.92,
-  adv: {},
+  adv: {}, ui: {},
   hub: { host: '', port: 8765, token: '', tls: true, auto: true, name: 'phone' },
 };
 const CAMERA_KEYS = ['facing', 'deviceId', 'res', 'fps', 'audio'];
@@ -19,7 +19,7 @@ const REC_KEYS = ['bitrate', 'codec'];
 let S = load();
 function load() {
   try { const j = JSON.parse(localStorage.getItem('webcam.settings') || '{}');
-    return { ...DEFAULTS, ...j, adv: { ...(j.adv || {}) }, hub: { ...DEFAULTS.hub, ...(j.hub || {}) } };
+    return { ...DEFAULTS, ...j, adv: { ...(j.adv || {}) }, ui: { ...(j.ui || {}) }, hub: { ...DEFAULTS.hub, ...(j.hub || {}) } };
   } catch { return structuredClone(DEFAULTS); }
 }
 function save() { try { localStorage.setItem('webcam.settings', JSON.stringify(S)); } catch {} }
@@ -94,40 +94,85 @@ async function applySettings(p) {
     if (k in caps) await applyAdv(k, v);
   }
   save(); syncUI(); updateCamInfo(); streamLoop(); sendState();
+  if (!restart && track) buildUI();   // keep the two copies of each control in sync
   return null;
 }
 
 // ---------- dynamic device controls ----------
 const ADV_KEYS = ['zoom', 'torch', 'exposureMode', 'exposureCompensation', 'exposureTime', 'focusMode',
   'focusDistance', 'whiteBalanceMode', 'colorTemperature', 'iso', 'brightness', 'contrast', 'saturation', 'sharpness'];
+const QUICK_KEYS = ['zoom', 'torch', 'exposureCompensation', 'focusDistance'];
+function mkControl(k) {
+  const c = caps[k]; if (c === undefined) return null;
+  const cur = (track.getSettings() || {})[k];
+  const lab = document.createElement('label'); let inp;
+  if (typeof c === 'boolean' || (Array.isArray(c) && c.every((x) => typeof x === 'boolean'))) {
+    lab.className = 'row'; inp = Object.assign(document.createElement('input'), { type: 'checkbox', checked: !!(S.adv[k] ?? cur) });
+    inp.onchange = () => applySettings({ [k]: inp.checked });
+    lab.append(inp, k);
+  } else if (Array.isArray(c)) {
+    inp = document.createElement('select'); c.forEach((o) => inp.add(new Option(o, o))); inp.value = S.adv[k] ?? cur ?? c[0];
+    inp.onchange = () => applySettings({ [k]: inp.value }); lab.append(k, inp);
+  } else if (typeof c === 'object' && 'min' in c) {
+    inp = Object.assign(document.createElement('input'), { type: 'range', min: c.min, max: c.max, step: c.step || (c.max - c.min) / 100 });
+    inp.value = S.adv[k] ?? cur ?? c.min;
+    const val = Object.assign(document.createElement('span'), { className: 'val', textContent: ' ' + Number(inp.value).toFixed(2) });
+    inp.oninput = () => (val.textContent = ' ' + Number(inp.value).toFixed(2));
+    inp.onchange = () => applySettings({ [k]: Number(inp.value) });
+    lab.append(k, val, inp);
+  } else return null;
+  return lab;
+}
 function buildUI() {
   const dev = $('#selDevice'); dev.innerHTML = '';
   devices.forEach((d, i) => dev.add(new Option(d.label || `Camera ${i + 1}`, d.deviceId)));
-  const cur = track && track.getSettings().deviceId; if (cur) dev.value = cur;
-  const box = $('#advControls'); box.innerHTML = '';
+  const curDev = track && track.getSettings().deviceId; if (curDev) dev.value = curDev;
+  const box = $('#advControls'), quick = $('#quickBody'); box.innerHTML = ''; quick.innerHTML = '';
   let n = 0;
-  for (const k of ADV_KEYS) {
-    const c = caps[k]; if (c === undefined) continue;
-    const cur = (track.getSettings() || {})[k];
-    const lab = document.createElement('label'); let inp;
-    if (typeof c === 'boolean' || (Array.isArray(c) && c.every((x) => typeof x === 'boolean'))) {
-      lab.className = 'row'; inp = Object.assign(document.createElement('input'), { type: 'checkbox', checked: !!(S.adv[k] ?? cur) });
-      inp.onchange = () => applySettings({ [k]: inp.checked });
-      lab.append(inp, k);
-    } else if (Array.isArray(c)) {
-      inp = document.createElement('select'); c.forEach((o) => inp.add(new Option(o, o))); inp.value = S.adv[k] ?? cur ?? c[0];
-      inp.onchange = () => applySettings({ [k]: inp.value }); lab.append(k, inp);
-    } else if (typeof c === 'object' && 'min' in c) {
-      inp = Object.assign(document.createElement('input'), { type: 'range', min: c.min, max: c.max, step: c.step || (c.max - c.min) / 100 });
-      inp.value = S.adv[k] ?? cur ?? c.min;
-      const val = Object.assign(document.createElement('span'), { className: 'val', textContent: ' ' + Number(inp.value).toFixed(2) });
-      inp.oninput = () => (val.textContent = ' ' + Number(inp.value).toFixed(2));
-      inp.onchange = () => applySettings({ [k]: Number(inp.value) });
-      lab.append(k, val, inp);
-    } else continue;
-    box.append(lab); n++;
+  if (track) for (const k of ADV_KEYS) {
+    const el = mkControl(k); if (!el) continue;
+    box.append(el); n++;
+    if (QUICK_KEYS.includes(k)) quick.append(mkControl(k));
   }
   if (!n) box.innerHTML = '<p class="hint">This camera/browser exposes no extra controls.</p>';
+  $('#quick').hidden = !quick.children.length; placeAll();
+}
+// ---------- movable controls ----------
+const clamp = (v, lo, hi) => Math.min(Math.max(v, lo), hi);
+const WIDGETS = { bar: { el: '#actions', def: { x: 0.5, y: 0.97, vert: false } }, quick: { el: '#quick', def: { x: 0.02, y: 0.45, vert: false } } };
+function place(name) {
+  const w = WIDGETS[name], el = $(w.el), host = el.offsetParent; if (!host || el.hidden) return;
+  const p = { ...w.def, ...(S.ui[name] || {}) };
+  el.classList.toggle('vert', !!p.vert);
+  const W = Math.max(0, host.clientWidth - el.offsetWidth), H = Math.max(0, host.clientHeight - el.offsetHeight);
+  el.style.left = clamp(p.x * W, 0, W) + 'px'; el.style.top = clamp(p.y * H, 0, H) + 'px';
+}
+function placeAll() { Object.keys(WIDGETS).forEach(place); }
+function initWidgets() {
+  for (const [name, w] of Object.entries(WIDGETS)) {
+    const el = $(w.el), grip = el.querySelector('.grip'), rot = el.querySelector('.rot');
+    grip.onpointerdown = (e) => {
+      e.preventDefault(); grip.setPointerCapture(e.pointerId);
+      const host = el.offsetParent, hr = host.getBoundingClientRect(), r = el.getBoundingClientRect(), dx = e.clientX - r.left, dy = e.clientY - r.top;
+      const W = host.clientWidth - el.offsetWidth, H = host.clientHeight - el.offsetHeight;
+      const move = (m) => { el.style.left = clamp(m.clientX - hr.left - dx, 0, W) + 'px'; el.style.top = clamp(m.clientY - hr.top - dy, 0, H) + 'px'; };
+      const up = () => {
+        grip.removeEventListener('pointermove', move); grip.removeEventListener('pointerup', up);
+        S.ui[name] = { ...(S.ui[name] || w.def), x: W > 0 ? parseFloat(el.style.left) / W : 0, y: H > 0 ? parseFloat(el.style.top) / H : 0 }; save();
+      };
+      grip.addEventListener('pointermove', move); grip.addEventListener('pointerup', up);
+    };
+    rot.onclick = () => { S.ui[name] = { ...w.def, ...(S.ui[name] || {}), vert: !(S.ui[name] || w.def).vert }; save(); place(name); };
+  }
+  addEventListener('resize', placeAll);
+  $('#btnFull').onclick = toggleFull;
+  $('#btnResetLayout').onclick = () => { S.ui = {}; save(); placeAll(); toast('Layout reset'); };
+  placeAll();
+}
+function toggleFull() {
+  const on = document.body.classList.toggle('full');
+  if (on) document.documentElement.requestFullscreen?.().catch(() => {}); else if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+  setTimeout(placeAll, 50);
 }
 function syncUI() {
   $('#selRes').value = S.res; $('#selFps').value = String(S.fps); $('#selBitrate').value = S.bitrate; $('#selCodec').value = S.codec; $('#chkAudio').checked = S.audio;
@@ -476,7 +521,7 @@ $('#btnInstall').onclick = async () => { if (deferredInstall) { deferredInstall.
 
 (async function init() {
   const fromHash = readHash();
-  fillHub(); syncUI(); recUI(); loadRecs(); await initSW();
+  fillHub(); syncUI(); recUI(); initWidgets(); loadRecs(); await initSW();
   try { await startCamera(); } catch {}
   if (fromHash || (S.hub.host && S.hub.auto && localStorage.getItem('webcam.wasConnected') === '1')) { $('#btnConnect').textContent = 'Disconnect'; connect(); }
   window.webcam = { S, applySettings, snap, connect, disconnect }; // debugging / tests

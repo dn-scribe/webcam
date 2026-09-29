@@ -92,7 +92,10 @@ hub.stream(True, fps=10)                    # hub.latest_frame() -> bytes
 hub.rec_start(); ...; mp4 = hub.rec_stop_and_fetch()
 ```
 
-## 5. Known limits
+## 5. Browser viewer (`/view`, WS `/ui`)
+The hub serves `python/viewer.html` at `/view?token=T`. It opens `wss://host/ui?token=T`. The hub forwards every phone→hub message (JSON and binary, unchanged) to all viewers and forwards viewer commands `set|stream|snap|rec|get_state` to the phone. Extra hub→viewer message: `{t:"phone", connected, name}`. Viewer snapshot ids start at `0x40000000` so they never clash with the Python API's. Preview frames are dropped for a viewer that is still busy, so a slow browser never stalls the phone. The hub turns the phone's stream on when the first viewer joins and off when the last leaves.
+
+## 6. Known limits
 * Recording is buffered in memory on the phone (fine for minutes, not hours).
 * Android may throttle the page when the screen is off; the app holds a screen wake lock.
 * Manual camera controls depend on the browser/device exposing them.

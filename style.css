@@ -10,7 +10,6 @@ video{width:100%;height:100%;object-fit:contain;display:block}
 .dot.off{background:#666}.dot.on{background:var(--grn)}.dot.wait{background:#ffb020}
 .badge{background:var(--red);color:#fff;padding:1px 8px;border-radius:10px}
 .toast{position:absolute;left:50%;bottom:10px;transform:translateX(-50%);background:#000c;padding:6px 14px;border-radius:16px;font-size:14px;max-width:90%}
-.bar{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;padding:10px;position:sticky;top:0;background:var(--bg);z-index:5}
 button{font:inherit;color:var(--fg);background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 14px}
 button:active{background:#1f2730}button:disabled{opacity:.4}
 button.big{font-size:24px;display:flex;flex-direction:column;align-items:center;padding:8px 0}
@@ -34,3 +33,16 @@ h4{margin:4px 0 8px;color:var(--dim);font-size:13px;text-transform:uppercase;let
 .gallery a{display:block;position:relative}
 .gallery img{width:100%;aspect-ratio:4/3;object-fit:cover;border-radius:8px;display:block}
 .rec-row{display:flex;gap:6px;align-items:center;padding:6px 0;border-top:1px solid var(--line)}.rec-row span{flex:1;font-size:13px;overflow-wrap:anywhere}.rec-row button{padding:6px 10px}
+.widget{position:absolute;z-index:6;display:flex;align-items:stretch;gap:6px;padding:6px;background:#000b;border:1px solid #fff2;border-radius:14px;backdrop-filter:blur(6px)}
+.widget .grip{display:flex;align-items:center;padding:0 6px;color:#fff9;cursor:grab;touch-action:none;user-select:none;font-size:20px}
+.widget.vert{flex-direction:column}.widget.vert .grip{padding:4px 0;justify-content:center}
+.widget button.big{width:62px;background:#1b222b}
+.widget label{color:#ddd;font-size:12px;min-width:110px}
+.widget .mini{align-self:center}
+.mini{padding:2px 8px;font-size:16px;background:#0008;border:1px solid #fff3;border-radius:8px;color:#fff}
+.hud .mini{pointer-events:auto}
+#quickBody{display:flex;gap:10px;align-items:center}.widget.vert #quickBody{flex-direction:column;align-items:stretch}
+body.full .view{position:fixed;inset:0;max-height:none;aspect-ratio:auto;height:100dvh;z-index:4}
+body.full .panels{display:none}
+.view{min-height:280px}
+.widget.vert button.big{width:46px;padding:6px 0}.widget.vert button.big small{display:none}

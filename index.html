@@ -18,15 +18,22 @@
       <span id="connDot" class="dot off"></span><span id="connText">offline</span>
       <span id="recBadge" class="badge" hidden>● REC <b id="recTime">0:00</b></span>
       <span id="camInfo" class="info"></span>
+      <button id="btnFull" class="mini" title="Full-screen view">⛶</button>
+    </div>
+    <div id="actions" class="widget">
+      <span class="grip" title="Drag to move">⠿</span>
+      <button id="btnSnap" class="big">📷<small>Snap</small></button>
+      <button id="btnRec" class="big">⏺<small>Record</small></button>
+      <button id="btnDl" class="big" disabled>⬇<small>Download</small></button>
+      <button id="btnFlip" class="big">🔄<small>Flip</small></button>
+      <button class="rot mini" title="Rotate toolbar">↻</button>
+    </div>
+    <div id="quick" class="widget quick" hidden>
+      <span class="grip" title="Drag to move">⠿</span>
+      <div id="quickBody"></div>
+      <button class="rot mini" title="Rotate panel">↻</button>
     </div>
     <div id="toast" class="toast" hidden></div>
-  </section>
-
-  <section class="bar">
-    <button id="btnSnap" class="big">📷<small>Snap</small></button>
-    <button id="btnRec" class="big">⏺<small>Record</small></button>
-    <button id="btnDl" class="big" disabled>⬇<small>Download</small></button>
-    <button id="btnFlip" class="big">🔄<small>Flip</small></button>
   </section>
 
   <section class="panels">
@@ -97,6 +104,7 @@
       <summary>App</summary>
       <p>Version <b id="verText"></b></p>
       <div class="actions">
+        <button id="btnResetLayout">Reset control layout</button>
         <button id="btnInstall" hidden>Install app</button>
         <button id="btnUpdate">Update / clear cache</button>
       </div>
