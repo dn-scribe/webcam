@@ -140,6 +140,10 @@ class Hub:
 
     async def _main(self):
         self._loop = asyncio.get_running_loop()
+        if not self.quiet:  # surfaces TLS handshake failures (e.g. phone rejecting the certificate)
+            import logging
+            logging.basicConfig(level=logging.WARNING, format="[hub %(levelname)s] %(message)s")
+            logging.getLogger("websockets.server").setLevel(logging.INFO)
         ctx = None
         if self.tls:
             crt, key = (self.cert, self.key) if self.cert else ensure_cert(self.ip)
@@ -152,6 +156,8 @@ class Hub:
 
     def _http(self, connection, request):
         """Plain HTTP(S) on the same port: /  -> status page (for cert trust); other paths -> app files."""
+        if not self.quiet:
+            print(f"[hub] {connection.remote_address[0]} -> {request.path.split('?')[0]}")
         if request.path.split("?")[0] == "/ws":
             return None
         path = request.path.split("?")[0]

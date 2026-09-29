@@ -312,7 +312,7 @@ async function loadRecs() {
 }
 
 // ---------- hub connection ----------
-let ws = null, reconnectTimer, wantConn = false, backoff = 1000;
+let ws = null, reconnectTimer, wantConn = false, backoff = 1000, failures = 0;
 const wsOpen = () => ws && ws.readyState === 1;
 const sendJSON = (o) => { if (wsOpen()) ws.send(JSON.stringify(o)); };
 function setConn(state, text) {
@@ -321,6 +321,22 @@ function setConn(state, text) {
 }
 function hubUrl(scheme) {
   const h = S.hub; return `${scheme}://${h.host}:${h.port}`;
+}
+async function probe() {
+  const h = S.hub, ctl = new AbortController(), t = setTimeout(() => ctl.abort(), 5000);
+  try { await fetch(`https://${h.host}:${h.port}/`, { mode: 'no-cors', cache: 'no-store', signal: ctl.signal }); return 'ok'; }
+  catch { return ctl.signal.aborted ? 'timeout' : 'fail'; } finally { clearTimeout(t); }
+}
+async function diagnose() {
+  const h = S.hub; if (!h.host) return 'Enter the hub address first.';
+  $('#connHint').textContent = 'Testing…';
+  const r = await probe(), where = `${h.host}:${h.port}`;
+  const msg = {
+    ok: `✔ ${where} is reachable and its certificate is trusted, yet the socket failed. Check the token matches the hub, and that the hub is the current webcam_hub.py.`,
+    timeout: `✖ No answer from ${where} within 5 s. Wrong IP? Phone on a different Wi-Fi/guest network? PC firewall blocking Python (allow it on private networks)?`,
+    fail: `✖ ${where} refused or its certificate isn't trusted. Tap “Trust hub certificate”: if the page doesn't load → hub not running / wrong port / network. If it shows “Webcam hub OK” after the warning → accept it, come back and retry.`,
+  }[r];
+  $('#connHint').textContent = msg; return msg;
 }
 function connect() {
   clearTimeout(reconnectTimer);
@@ -339,11 +355,16 @@ function connect() {
   ws.onopen = () => { opened = true; sendJSON({ t: 'hello', token: h.token, name: h.name || 'phone', app: 'webcam-pwa', proto: PROTO, version: self.APP_VERSION }); };
   ws.onmessage = onMessage;
   ws.onerror = () => {};
+  const t0 = performance.now();
   ws.onclose = (e) => {
+    const dt = Math.round(performance.now() - t0), was = opened;
     clearTimeout(streamTimer); setConn('off', 'offline'); $('#btnConnect').textContent = wantConn && h.auto ? 'Disconnect' : 'Connect'; ws = null;
     if (e.code === 4401) { $('#connHint').textContent = 'Hub rejected the token.'; wantConn = false; return; }
-    if (!opened) $('#connHint').innerHTML = 'Could not connect. Same Wi-Fi? Hub running? With the self-signed certificate, tap “Trust hub certificate” once and accept the warning, then come back.';
-    if (wantConn && h.auto) { reconnectTimer = setTimeout(connect, backoff); backoff = Math.min(backoff * 1.6, 10000); }
+    if (!was && !failures++) diagnose();          // first failure of a run: explain why
+    if (wantConn && h.auto) {
+      const wait = backoff; reconnectTimer = setTimeout(connect, wait); backoff = Math.min(backoff * 1.6, 10000);
+      setConn('off', `offline · attempt ${failures} failed (${dt} ms, code ${e.code}) · retry ${Math.round(wait / 1000)}s`);
+    } else setConn('off', `offline (code ${e.code})`);
   };
 }
 function disconnect() { try { localStorage.removeItem('webcam.wasConnected'); } catch {} wantConn = false; clearTimeout(reconnectTimer); if (ws) { ws.onclose = null; ws.close(); ws = null; } setConn('off', 'offline'); }
@@ -353,7 +374,7 @@ async function onMessage(ev) {
   let m; try { m = JSON.parse(ev.data); } catch { return; }
   try {
     switch (m.t) {
-      case 'welcome': backoff = 1000; setConn('on', 'hub ' + S.hub.host); $('#connHint').textContent = ''; $('#pConn').open = false; sendState(); reportRec(); streamLoop(); break;
+      case 'welcome': backoff = 1000; failures = 0; setConn('on', 'hub ' + S.hub.host); $('#connHint').textContent = ''; $('#pConn').open = false; sendState(); reportRec(); streamLoop(); break;
       case 'ping': sendJSON({ t: 'pong' }); break;
       case 'get_state': sendState(); break;
       case 'set': { const e = await applySettings(m.settings || {}); if (e) sendJSON({ t: 'error', msg: e }); break; }
@@ -448,7 +469,8 @@ $('#chkStream').onchange = (e) => applySettings({ streamOn: e.target.checked });
 ['stFps:streamFps', 'stWidth:streamWidth', 'stQual:streamQuality', 'snQual:snapQuality'].forEach((s) => {
   const [id, key] = s.split(':'); $('#' + id).onchange = (e) => applySettings({ [key]: Number(e.target.value) });
 });
-$('#btnConnect').onclick = () => { readHub(); if (wantConn && ws) { disconnect(); $('#btnConnect').textContent = 'Connect'; } else { backoff = 1000; connect(); $('#btnConnect').textContent = 'Disconnect'; } };
+$('#btnConnect').onclick = () => { readHub(); if (wantConn && ws) { disconnect(); $('#btnConnect').textContent = 'Connect'; } else { backoff = 1000; failures = 0; connect(); $('#btnConnect').textContent = 'Disconnect'; } };
+$('#btnTest').onclick = () => { readHub(); diagnose(); };
 $('#btnUpdate').onclick = () => { toast('Clearing cache…'); clearAllAndReload(); };
 $('#btnInstall').onclick = async () => { if (deferredInstall) { deferredInstall.prompt(); deferredInstall = null; } };
 
