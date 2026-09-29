@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b0d10">
+<title>IP Webcam</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+  <section class="view">
+    <video id="video" playsinline muted autoplay></video>
+    <div class="hud">
+      <span id="connDot" class="dot off"></span><span id="connText">offline</span>
+      <span id="recBadge" class="badge" hidden>● REC <b id="recTime">0:00</b></span>
+      <span id="camInfo" class="info"></span>
+    </div>
+    <div id="toast" class="toast" hidden></div>
+  </section>
+
+  <section class="bar">
+    <button id="btnSnap" class="big">📷<small>Snap</small></button>
+    <button id="btnRec" class="big">⏺<small>Record</small></button>
+    <button id="btnDl" class="big" disabled>⬇<small>Download</small></button>
+    <button id="btnFlip" class="big">🔄<small>Flip</small></button>
+  </section>
+
+  <section class="panels">
+    <details id="pConn" open>
+      <summary>Connection to Python hub</summary>
+      <div class="grid">
+        <label>Hub address <input id="hubHost" inputmode="url" placeholder="192.168.1.20" autocapitalize="off" autocomplete="off"></label>
+        <label>Port <input id="hubPort" type="number" min="1" max="65535" value="8765"></label>
+        <label>Token <input id="hubToken" placeholder="(shown by hub)" autocapitalize="off" autocomplete="off"></label>
+        <label>Device name <input id="devName" placeholder="phone"></label>
+        <label class="row"><input id="hubTls" type="checkbox" checked> Use TLS (wss)</label>
+        <label class="row"><input id="hubAuto" type="checkbox" checked> Auto-reconnect</label>
+      </div>
+      <div class="actions">
+        <button id="btnConnect">Connect</button>
+        <a id="certLink" href="#" target="_blank" rel="noopener" hidden>Trust hub certificate ↗</a>
+      </div>
+      <p id="connHint" class="hint"></p>
+    </details>
+
+    <details id="pCam" open>
+      <summary>Camera settings</summary>
+      <div class="grid">
+        <label>Camera <select id="selDevice"></select></label>
+        <label>Resolution
+          <select id="selRes">
+            <option>640x480</option><option>1280x720</option><option>1920x1080</option><option>3840x2160</option>
+          </select></label>
+        <label>Frame rate <select id="selFps"><option>15</option><option>24</option><option>30</option><option>60</option></select></label>
+        <label class="row"><input id="chkAudio" type="checkbox"> Record microphone</label>
+      </div>
+      <h4>Device controls</h4>
+      <div id="advControls" class="grid"><p class="hint">Start the camera to see controls.</p></div>
+    </details>
+
+    <details id="pStream">
+      <summary>Live stream to hub</summary>
+      <div class="grid">
+        <label class="row"><input id="chkStream" type="checkbox"> Send preview frames</label>
+        <label>Stream fps <input id="stFps" type="number" min="1" max="30" value="10"></label>
+        <label>Stream width <input id="stWidth" type="number" min="160" max="3840" step="10" value="640"></label>
+        <label>JPEG quality <input id="stQual" type="range" min="0.1" max="1" step="0.05" value="0.6"></label>
+        <label>Snapshot quality <input id="snQual" type="range" min="0.5" max="1" step="0.01" value="0.92"></label>
+      </div>
+    </details>
+
+    <details id="pGal">
+      <summary>Snapshots <span id="galCount"></span></summary>
+      <div id="gallery" class="gallery"></div>
+    </details>
+
+    <details id="pApp">
+      <summary>App</summary>
+      <p>Version <b id="verText"></b></p>
+      <div class="actions">
+        <button id="btnInstall" hidden>Install app</button>
+        <button id="btnUpdate">Update / clear cache</button>
+      </div>
+      <p class="hint">Once installed the app works with no internet. “Update / clear cache” deletes cached files and reloads the newest version (needs the page reachable once).</p>
+    </details>
+  </section>
+</main>
+<script src="version.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
