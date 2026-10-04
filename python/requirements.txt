@@ -1,0 +1,5 @@
+# Python side of the IP Webcam (python/webcam_hub.py)
+websockets>=13
+cryptography>=41
+# optional: show the connect QR code in the terminal
+qrcode>=7
