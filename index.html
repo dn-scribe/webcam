@@ -71,8 +71,9 @@
         <label>Camera <select id="selDevice"></select></label>
         <label>Resolution
           <select id="selRes">
-            <option>640x480</option><option>1280x720</option><option>1920x1080</option><option>3840x2160</option>
+            <option>640x480</option><option>1280x720</option><option>1920x1080</option><option>3840x2160</option><option value="max">Maximum available</option>
           </select></label>
+        <label>Photo size <select id="selPhoto"><option value="max">Maximum (full sensor)</option><option value="12mp">≈ 12 MP</option><option value="8mp">≈ 8 MP</option><option value="2mp">≈ 2 MP</option><option value="video">Video frame size</option></select></label>
         <label>Frame rate <select id="selFps"><option>15</option><option>24</option><option>30</option><option>60</option></select></label>
         <label class="row"><input id="chkAudio" type="checkbox"> Record microphone</label>
       </div>

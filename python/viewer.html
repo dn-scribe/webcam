@@ -87,7 +87,8 @@ dialog .row{margin:10px 0 0}dialog a.btn{flex:1;text-align:center;text-decoratio
 
   <details open><summary>Camera</summary>
     <label>Facing <select id="facing"><option value="environment">Back</option><option value="user">Front</option></select></label>
-    <label>Resolution <select id="res"><option>640x480</option><option>1280x720</option><option>1920x1080</option><option>3840x2160</option></select></label>
+    <label>Resolution <select id="res"><option>640x480</option><option>1280x720</option><option>1920x1080</option><option>3840x2160</option><option value="max">Maximum</option></select></label>
+    <label>Photo size <select id="photoRes"><option value="max">Maximum (sensor)</option><option value="12mp">≈ 12 MP</option><option value="8mp">≈ 8 MP</option><option value="2mp">≈ 2 MP</option><option value="video">Video frame size</option></select></label>
     <label>Frame rate <select id="fps"><option>15</option><option>24</option><option>30</option><option>60</option></select></label>
     <label class="chk"><input id="audio" type="checkbox"> Record microphone</label>
     <div id="adv"></div>
@@ -177,7 +178,7 @@ function render() {
   const v = state.video || {}; $('#info').textContent = v.w ? `${v.w}×${v.h} @${Math.round(v.fps || 0)} · ${frames} frames` : '';
   $('#msg').hidden = phoneUp && performance.now() - lastFrameAt < 3000;
   $('#msg').textContent = phoneUp ? 'Waiting for video…' : 'Waiting for the phone to connect…';
-  for (const k of ['facing', 'res', 'fps', 'audio', 'bitrate', 'codec', 'streamFps', 'streamWidth', 'streamQuality', 'snapQuality']) setVal($('#' + k), s[k]);
+  for (const k of ['facing', 'res', 'photoRes', 'fps', 'audio', 'bitrate', 'codec', 'streamFps', 'streamWidth', 'streamQuality', 'snapQuality']) setVal($('#' + k), s[k]);
   setVal($('#stream'), state.streaming);
   buildAdv(); renderRec();
 }
@@ -216,7 +217,7 @@ $('#bRec').onclick = toggleRec;
 $('#bGet').onclick = () => { if (recInfo.last) { wantRec.add(recInfo.last.id); toast('Fetching recording…'); send({ t: 'rec', action: 'send', id: recInfo.last.id }); } };
 $('#bFull').onclick = () => ($('#view').requestFullscreen ? $('#view').requestFullscreen() : 0);
 addEventListener('keydown', (e) => { if (/INPUT|SELECT/.test(e.target.tagName)) return; if (e.code === 'Space') { e.preventDefault(); snap(); } if (e.key === 'r') toggleRec(); });
-for (const k of ['facing', 'res', 'fps', 'bitrate', 'codec']) $('#' + k).onchange = (e) => set({ [k]: k === 'fps' ? Number(e.target.value) : e.target.value });
+for (const k of ['facing', 'res', 'photoRes', 'fps', 'bitrate', 'codec']) $('#' + k).onchange = (e) => set({ [k]: k === 'fps' ? Number(e.target.value) : e.target.value });
 $('#audio').onchange = (e) => set({ audio: e.target.checked });
 for (const k of ['streamFps', 'streamWidth', 'streamQuality', 'snapQuality']) $('#' + k).onchange = (e) => set({ [k]: Number(e.target.value) });
 $('#stream').onchange = (e) => send({ t: 'stream', on: e.target.checked });

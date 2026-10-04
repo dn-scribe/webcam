@@ -43,7 +43,7 @@ Everything else is optional: the token is off by default, and no pairing step is
 |---|---|
 | Camera | front/back/device, resolution, fps, microphone; every capability the browser reports for the track, rendered dynamically (zoom, torch, exposure mode/compensation/time, focus mode/distance, white balance/temperature, ISO, brightness, contrast, saturation, sharpness) |
 | UI | camera screen: video maximal, controls docked around it (CSS grid: top bar, view, quick strip, action row; action column on the right in landscape); settings sheet; pinch-to-zoom; optional floating draggable layout; preview Fit/Fill |
-| Snapshots | JPEG at native resolution, quality setting; saved to the phone library; hub may request one |
+| Snapshots | full-sensor JPEG through `ImageCapture.takePhoto()` (`photoRes`: `max`\|`12mp`\|`8mp`\|`2mp`\|`video`), falling back to the video frame at JPEG quality `snapQuality`; saved to the phone library; hub may request one |
 | Recording | MediaRecorder (H.264 mp4 if supported, else VP9/VP8 webm); bitrate 1/2.5/5/10 Mbps; chunks persisted to IndexedDB, crash recovery |
 | Library | photos + clips in one list: thumbnails, preview, rename, share, download, delete, multi-select, push to hub |
 | Live view | optional JPEG-per-frame preview stream with back-pressure (frames dropped, never queued) |
@@ -85,7 +85,7 @@ Library item: `{kind:"photo"\|"video", id, name, type, size, ts (ms), secs?, w?,
 |---|---|
 | `welcome` | `proto, name, hub` |
 | `hub` (probe reply) | `proto, name, tokenRequired, cameras` — hub then closes |
-| `set` | `settings: {facing, deviceId, res:"1280x720" (or width,height), fps, audio, bitrate:"low\|medium\|high\|max", codec:"auto\|h264\|vp9", streamFps, streamWidth, streamQuality, snapQuality, <any device capability: zoom, torch, …>}`. Camera-level keys restart the camera (refused while recording) |
+| `set` | `settings: {facing, deviceId, res:"1280x720"\|"max" (or width,height), fps, audio, photoRes, bitrate:"low\|medium\|high\|max", codec:"auto\|h264\|vp9", streamFps, streamWidth, streamQuality, snapQuality, <any device capability: zoom, torch, …>}`. Camera-level keys restart the camera (refused while recording) |
 | `stream` | `on, fps?, width?, quality?` |
 | `snap` | `id, quality?` (0–1) → `snap_meta` + binary `0x02` |
 | `rec` | `action: start\|stop\|send\|discard`, `id?` (for `send`/`discard`) |
@@ -137,6 +137,7 @@ Status codes: 401 token, 403 not LAN, 404 no match/ambiguous camera/item, 502 er
 * **Library notifications:** the app sends `lib` whenever the set of items or names changes; thumbnails are generated on request and cached for the session.
 * **Preview stream:** a canvas grabs the video at `streamFps`, scaled to `streamWidth`, JPEG `streamQuality`; skipped while the socket's `bufferedAmount` > 512 KiB.
 * **Reconnect:** exponential back-off 1 → 10 s; after 3 failed attempts with auto-reconnect on, it scans for the hub again (the IP may have changed).
+* **Camera resolution:** requested strictly (`exact` width/height, then the swapped orientation) and only then as a soft `ideal`, because Android treats `ideal` as a hint and often returns 640×480; a toast reports a delivered size more than 15% below the request.
 * **Wake lock** requested while the camera runs.
 
 ## 5. Offline and versioning

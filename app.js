@@ -8,14 +8,14 @@ const video = $('#video');
 
 // ---------- settings ----------
 const DEFAULTS = {
-  fit: 'contain', facing: 'environment', deviceId: '', res: '1280x720', fps: 30, audio: false, bitrate: 'medium', codec: 'auto',
+  photoRes: 'max', fit: 'contain', facing: 'environment', deviceId: '', res: '1280x720', fps: 30, audio: false, bitrate: 'medium', codec: 'auto',
   streamOn: false, streamFps: 10, streamWidth: 640, streamQuality: 0.6, snapQuality: 0.92,
   adv: {}, ui: {},
   hub: { host: '', port: 8765, token: '', tls: true, auto: true, name: 'cam-' + Math.random().toString(36).slice(2, 6), range: '', hubName: '' },
 };
 const CAMERA_KEYS = ['facing', 'deviceId', 'res', 'fps', 'audio'];
 const STREAM_KEYS = ['streamFps', 'streamWidth', 'streamQuality', 'snapQuality'];
-const REC_KEYS = ['bitrate', 'codec'];
+const REC_KEYS = ['bitrate', 'codec', 'photoRes'];
 let S = load();
 function load() {
   try { const j = JSON.parse(localStorage.getItem('webcam.settings') || '{}');
@@ -39,13 +39,25 @@ function download(blob, name) {
 // ---------- camera ----------
 let stream = null, track = null, caps = {}, devices = [];
 
+// Ask for the resolution strictly first (Android treats "ideal" as a hint and often hands back 640x480), in both
+// orientations, and only then fall back to the soft request.
+async function openStream(w, h) {
+  const base = { frameRate: { ideal: Number(S.fps) } };
+  if (S.deviceId) base.deviceId = { exact: S.deviceId }; else base.facingMode = { ideal: S.facing };
+  const mk = (W, H, strict) => ({ ...base, width: strict ? { exact: W } : { ideal: W }, height: strict ? { exact: H } : { ideal: H } });
+  const attempts = S.res === 'max' ? [[w, h, false]] : [[w, h, true], [h, w, true], [w, h, false]];
+  let last;
+  for (const [W, H, strict] of attempts) {
+    try { return await navigator.mediaDevices.getUserMedia({ video: mk(W, H, strict), audio: !!S.audio }); }
+    catch (e) { last = e; if (!['OverconstrainedError', 'ConstraintNotSatisfiedError'].includes(e.name)) throw e; }
+  }
+  throw last;
+}
 async function startCamera() {
   stopCamera();
-  const [w, h] = S.res.split('x').map(Number);
-  const v = { width: { ideal: w }, height: { ideal: h }, frameRate: { ideal: Number(S.fps) } };
-  if (S.deviceId) v.deviceId = { exact: S.deviceId }; else v.facingMode = { ideal: S.facing };
+  const [w, h] = S.res === 'max' ? [4096, 2160] : S.res.split('x').map(Number);
   try {
-    stream = await navigator.mediaDevices.getUserMedia({ video: v, audio: !!S.audio });
+    stream = await openStream(w, h);
   } catch (e) {
     if (S.audio) { S.audio = false; toast('Microphone unavailable, continuing without'); return startCamera(); }
     toast('Camera error: ' + e.name); throw e;
@@ -58,8 +70,13 @@ async function startCamera() {
   for (const [k, val] of Object.entries(S.adv)) await applyAdv(k, val, true);
   buildUI();
   updateCamInfo();
+  warnLowRes(w, h);
   requestWake();
   sendState();
+}
+function warnLowRes(w, h) {
+  const st = track.getSettings(), got = Math.max(st.width || 0, st.height || 0), want = Math.max(w, h);
+  if (S.res !== 'max' && got && got < want * 0.85) toast(`Camera delivers ${st.width}×${st.height}, below the ${S.res} requested`, 6000);
 }
 function stopCamera() {
   if (stream) stream.getTracks().forEach((t) => t.stop());
@@ -213,7 +230,7 @@ function initSheet() {
 }
 function syncUI() {
   video.style.objectFit = S.fit === 'cover' ? 'cover' : 'contain'; $('#selFit').value = S.fit === 'cover' ? 'cover' : 'contain';
-  $('#selRes').value = S.res; $('#selFps').value = String(S.fps); $('#selBitrate').value = S.bitrate; $('#selCodec').value = S.codec; $('#chkAudio').checked = S.audio;
+  $('#selRes').value = S.res; $('#selFps').value = String(S.fps); $('#selBitrate').value = S.bitrate; $('#selPhoto').value = S.photoRes; $('#selCodec').value = S.codec; $('#chkAudio').checked = S.audio;
   $('#chkStream').checked = S.streamOn; $('#stFps').value = S.streamFps; $('#stWidth').value = S.streamWidth;
   $('#stQual').value = S.streamQuality; $('#snQual').value = S.snapQuality;
 }
@@ -229,8 +246,24 @@ function grab(maxW, quality) {
   return new Promise((res, rej) => scratch.toBlob((b) => (b ? res({ blob: b, w: scratch.width, h: scratch.height }) : rej(new Error('encode failed'))), 'image/jpeg', quality));
 }
 let snaps = [], snapSeq = 0;   // persisted photos, newest first
+// Full-sensor photo through ImageCapture.takePhoto() (e.g. 12 MP), not a crop of the video frame (often <= 1080p).
+// S.photoRes: 'max' | 'video' | '<N>mp'. Falls back to the video frame when unsupported.
+async function takeStill() {
+  if (S.photoRes === 'video' || !track || !('ImageCapture' in window)) return null;
+  try {
+    const ic = new ImageCapture(track), pc = await ic.getPhotoCapabilities(), opt = {};
+    if (pc.imageWidth && pc.imageHeight) {
+      const mp = /^(\d+(?:\.\d+)?)mp$/.exec(S.photoRes || ''), maxW = pc.imageWidth.max, maxH = pc.imageHeight.max;
+      const k = mp ? Math.min(1, Math.sqrt((+mp[1] * 1e6) / (maxW * maxH))) : 1;
+      const snapTo = (v, r) => Math.min(r.max, Math.max(r.min, r.step > 1 ? Math.round(v / r.step) * r.step : Math.round(v)));
+      opt.imageWidth = snapTo(maxW * k, pc.imageWidth); opt.imageHeight = snapTo(maxH * k, pc.imageHeight);
+    }
+    const blob = await ic.takePhoto(opt), bmp = await createImageBitmap(blob), out = { blob, w: bmp.width, h: bmp.height }; bmp.close();
+    return out;
+  } catch (e) { console.warn('takePhoto failed, using video frame', e); return null; }
+}
 async function snap(quality, id) {
-  const { blob, w, h } = await grab(0, quality ?? S.snapQuality);
+  const { blob, w, h } = (await takeStill()) || (await grab(0, quality ?? S.snapQuality));
   const ts = Date.now(), item = { id: ts * 100 + (snapSeq++ % 100), kind: 'photo', name: `snap-${stamp()}-${String(ts % 1000).padStart(3, '0')}.jpg`, type: 'image/jpeg', size: blob.size, ts, w, h, blob };
   snaps.unshift(item); idb.put('snaps', item).catch(() => {}); renderLib(); storageInfo(); flash();
   if (id != null && wsOpen()) {
@@ -404,7 +437,7 @@ function renderLib() {
     card.innerHTML = (u ? `<img src="${u}" alt="">` : '<div class="noimg">🎞</div>') +
       (i.kind === 'video' ? `<span class="tag">▶ ${fmtDur(i.secs || 0)}</span>` : '') + (selMode ? `<span class="chk">${sel.has(itemKey(i)) ? '✔' : ''}</span>` : '') +
       `<div class="cap"></div>`;
-    card.querySelector('.cap').textContent = `${i.name.replace(/^(snap|rec)-/, '')} · ${fmtSize(i.size)}`;
+    card.querySelector('.cap').textContent = `${i.name.replace(/^(snap|rec)-/, '')} · ${i.w && i.kind === 'photo' ? i.w + '×' + i.h + ' · ' : ''}${fmtSize(i.size)}`;
     card.onclick = () => { if (selMode) { sel.has(itemKey(i)) ? sel.delete(itemKey(i)) : sel.add(itemKey(i)); renderLib(); } else openPreview(i); };
     grid.append(card);
   }
@@ -646,7 +679,7 @@ function sendState() {
   const st = track ? track.getSettings() : {};
   sendJSON({
     t: 'state', version: self.APP_VERSION, build: self.APP_BUILD,
-    settings: { facing: S.facing, deviceId: S.deviceId, res: S.res, fps: S.fps, audio: S.audio, bitrate: S.bitrate, codec: S.codec, streamFps: S.streamFps, streamWidth: S.streamWidth, streamQuality: S.streamQuality, snapQuality: S.snapQuality, ...S.adv },
+    settings: { facing: S.facing, deviceId: S.deviceId, res: S.res, fps: S.fps, audio: S.audio, bitrate: S.bitrate, codec: S.codec, photoRes: S.photoRes, streamFps: S.streamFps, streamWidth: S.streamWidth, streamQuality: S.streamQuality, snapQuality: S.snapQuality, ...S.adv },
     caps, devices: devices.map((d) => ({ id: d.deviceId, label: d.label })),
     video: { w: st.width, h: st.height, fps: st.frameRate }, recording: recStatus(), streaming: S.streamOn,
   });
@@ -710,6 +743,7 @@ $('#selCodec').onchange = (e) => applySettings({ codec: e.target.value });
 $('#btnFlip').onclick = () => applySettings({ facing: S.facing === 'user' ? 'environment' : 'user', deviceId: '' });
 $('#selDevice').onchange = (e) => applySettings({ deviceId: e.target.value });
 $('#selFit').onchange = (e) => { S.fit = e.target.value; save(); syncUI(); };
+$('#selPhoto').onchange = (e) => applySettings({ photoRes: e.target.value });
 $('#selRes').onchange = (e) => applySettings({ res: e.target.value });
 $('#selFps').onchange = (e) => applySettings({ fps: Number(e.target.value) });
 $('#chkAudio').onchange = (e) => applySettings({ audio: e.target.checked });
