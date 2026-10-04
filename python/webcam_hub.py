@@ -53,7 +53,7 @@ import time
 import webbrowser
 import zipfile
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 from websockets.asyncio.server import serve
 from websockets.datastructures import Headers
@@ -227,12 +227,14 @@ class Hub:
     VIEWER_CMDS = {"set", "stream", "snap", "rec", "get_state", "lib_list", "lib_thumb", "lib_delete"}
 
     def __init__(self, port=8765, host="0.0.0.0", token="", tls=True, cert=None, key=None,
-                 app_dir=None, app_url=APP_URL, quiet=False, save_dir="webcam-media", allow_public=False):
-        """token: "" = open (default) | "auto" = random | any string = required of phones/viewers/HTTP API.
+                 app_dir=None, app_url=APP_URL, quiet=False, save_dir="webcam-media", allow_public=False, name=None):
+        """name: how this hub identifies itself to phones and viewers (default: this machine's host name).
+        token: "" = open (default) | "auto" = random | any string = required of phones/viewers/HTTP API.
         allow_public=False rejects clients that are not on a private/loopback address."""
         self.port, self.host, self.tls = port, host, tls
         self.token = secrets.token_urlsafe(6) if token == "auto" else (token or "")
         self.allow_public = allow_public
+        self.name = (name or socket.gethostname() or "hub")[:40]
         self.ip = lan_ip()
         self.cert, self.key, self.ca_path = cert, key, None
         self.app_dir = Path(app_dir).resolve() if app_dir else None
@@ -261,7 +263,7 @@ class Hub:
     def connect_url(self):
         base = self.app_url if self.app_url.endswith("/") else self.app_url + "/"
         tok = f"&token={self.token}" if self.token else ""
-        return f"{base}#hub={self.ip}:{self.port}{tok}&tls={int(self.tls)}"
+        return f"{base}#hub={self.ip}:{self.port}&hubname={quote(self.name)}{tok}&tls={int(self.tls)}"
 
     @property
     def trust_url(self):
@@ -288,9 +290,9 @@ class Hub:
         return self
 
     def print_banner(self):
-        print(f"\nWebcam hub on {self.scheme}://{self.ip}:{self.port}   "
+        print(f"\nWebcam hub \"{self.name}\" on {self.scheme}://{self.ip}:{self.port}   "
               f"{'token: ' + self.token if self.token else 'OPEN: no token, LAN clients only'}")
-        print(f"  Phone: open {self.app_url} — it looks for this hub on the LAN by itself,")
+        print(f"  Phone: open {self.app_url}, put \"{self.name}\" in its 'Hub name' field (optional) — it finds this hub on the LAN by itself,")
         print(f"         or tap through {self.connect_url}")
         if self.tls and self.ca_path:
             print(f"  First time only, to silence the certificate warning and allow auto-discovery,")
@@ -509,13 +511,13 @@ class Hub:
         except Exception:
             return
         if hello.get("t") == "probe":   # LAN scan from the phone: "is there a hub here?"
-            await ws.send(json.dumps({"t": "hub", "proto": PROTO, "tokenRequired": bool(self.token), "cameras": len(self._cams)}))
+            await ws.send(json.dumps({"t": "hub", "proto": PROTO, "name": self.name, "tokenRequired": bool(self.token), "cameras": len(self._cams)}))
             return
         if hello.get("t") != "hello" or not self._tok_ok(hello.get("token")):
             await ws.close(4401, "bad token")
             return
         cam = await self._register(ws, hello)
-        await ws.send(json.dumps({"t": "welcome", "proto": PROTO, "name": cam.name}))
+        await ws.send(json.dumps({"t": "welcome", "proto": PROTO, "name": cam.name, "hub": self.name}))
         if not self.quiet:
             print(f"[hub] camera connected: {cam.name} @ {cam.ip} (app v{hello.get('version')})")
         if self.on_camera:
@@ -596,7 +598,7 @@ class Hub:
     async def _send_cameras(self):
         for v in list(self._viewers):
             cam = self._vcam(v)
-            await self._vsend(v, json.dumps({"t": "cameras", "items": [{"name": c.name, "ip": c.ip} for c in self._cams.values()],
+            await self._vsend(v, json.dumps({"t": "cameras", "hub": self.name, "items": [{"name": c.name, "ip": c.ip} for c in self._cams.values()],
                                              "selected": cam.name if cam else None}), False)
 
     async def _viewer_sync(self, v):
@@ -909,6 +911,7 @@ class Hub:
 def cli():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--port", type=int, default=8765)
+    ap.add_argument("--name", help="name of this hub, shown to phones (they can pick a hub by it). Default: host name")
     ap.add_argument("--token", default="", help="require this shared secret ('auto' = random). Default: open, no token")
     ap.add_argument("--allow-public", action="store_true", help="also accept clients outside private/LAN address ranges")
     ap.add_argument("--no-tls", action="store_true", help="plain ws:// (only usable from an http:// page, e.g. --serve-app)")
@@ -929,7 +932,7 @@ def cli():
     a = ap.parse_args()
 
     hub = Hub(port=a.port, token=a.token, tls=not a.no_tls, cert=a.cert, key=a.key, app_dir=a.serve_app,
-              quiet=a.quiet, save_dir=a.out, allow_public=a.allow_public)
+              quiet=a.quiet, save_dir=a.out, allow_public=a.allow_public, name=a.name)
     if a.serve_app:
         hub.app_url = f"{hub.trust_url}"
     hub.start()

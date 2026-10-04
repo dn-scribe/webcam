@@ -104,6 +104,7 @@ Phone → hub: `lib {req?, items:[{kind:'photo'|'video', id, name, type, size, t
 * `token` is optional: empty hub token = open. Clients outside private ranges (RFC1918, link-local, 100.64/10, loopback) get 403 / close code 4403 unless `allow_public`.
 * Discovery: the phone sends `{t:"probe"}` on `/ws`; a hub replies `{t:"hub", proto, tokenRequired, cameras}` and closes. The phone probes the local /24 (its address from WebRTC ICE candidates, or a typed range) over `wss`. Probing only succeeds when the phone trusts the hub certificate, hence the one-time CA install.
 * TLS: a local CA (name-constrained to private IP ranges + localhost) signs a leaf certificate for the hub's current IP, re-issued automatically when the IP changes; `/ca.crt` serves the CA.
+* Hub identity: `Hub(name)` (`--name`, default host name) is sent in the probe reply (`{t:"hub", name, …}`), `welcome.hub` and the viewers' `cameras.hub`. The app's *Hub name* setting filters scan results (exact / substring / glob) and is carried by the connect link as `&hubname=`.
 * Viewers: `{t:"cameras", items:[{name,ip}], selected}` from the hub, `{t:"select", camera}` to the hub; every phone→viewer relay is per selected camera. HTTP routes accept `?camera=`; `/cameras` lists them.
 
 ## 8. Known limits

@@ -223,6 +223,7 @@ $('#stream').onchange = (e) => send({ t: 'stream', on: e.target.checked });
 // ---- several cameras ----
 let curCam = null;
 function setCameras(m) {
+  if (m.hub) { $('header b').textContent = '📷 ' + m.hub; document.title = m.hub + ' — webcam viewer'; }
   const sel = $('#camSel'), changed = curCam !== m.selected;
   sel.innerHTML = ''; (m.items || []).forEach((c) => sel.add(new Option(`${c.name} · ${c.ip}`, c.name)));
   sel.hidden = (m.items || []).length < 2; curCam = m.selected; if (curCam) sel.value = curCam;

@@ -11,7 +11,7 @@ const DEFAULTS = {
   facing: 'environment', deviceId: '', res: '1280x720', fps: 30, audio: false, bitrate: 'medium', codec: 'auto',
   streamOn: false, streamFps: 10, streamWidth: 640, streamQuality: 0.6, snapQuality: 0.92,
   adv: {}, ui: {},
-  hub: { host: '', port: 8765, token: '', tls: true, auto: true, name: 'cam-' + Math.random().toString(36).slice(2, 6), range: '' },
+  hub: { host: '', port: 8765, token: '', tls: true, auto: true, name: 'cam-' + Math.random().toString(36).slice(2, 6), range: '', hubName: '' },
 };
 const CAMERA_KEYS = ['facing', 'deviceId', 'res', 'fps', 'audio'];
 const STREAM_KEYS = ['streamFps', 'streamWidth', 'streamQuality', 'snapQuality'];
@@ -474,6 +474,11 @@ function localIPv4s() {
     pc.createOffer().then((o) => pc.setLocalDescription(o)).catch(fin); setTimeout(fin, 2500);
   });
 }
+const nameMatch = (name, pat) => {
+  if (!pat) return true; const n = (name || '').toLowerCase(), q = pat.toLowerCase();
+  if (n === q) return true;
+  return /[*?]/.test(q) ? new RegExp('^' + q.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.') + '$').test(n) : n.includes(q);
+};
 const isPrivateIP = (ip) => /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(ip);
 const parseRange = (txt) => (txt || '').split(/[,\s]+/).map((x) => /^(\d+\.\d+\.\d+)(\.\d+(\/\d+)?)?\.?$/.exec(x.trim())).filter(Boolean).map((m) => m[1] + '.');
 function probeHost(host, port, tls, timeout = 2500) {
@@ -499,18 +504,20 @@ async function findHub() {
   const hint = (t) => ($('#connHint').textContent = t), pick = $('#hubPick'); pick.innerHTML = '';
   try {
     let found = [];
-    if (S.hub.host) { hint(`Trying ${S.hub.host}…`); const r = await probeHost(S.hub.host, S.hub.port, S.hub.tls); if (r) found = [r]; }
+    if (S.hub.host) { hint(`Trying ${S.hub.host}…`); const r = await probeHost(S.hub.host, S.hub.port, S.hub.tls); if (r && nameMatch(r.name, S.hub.hubName)) found = [r]; }
     if (!found.length) {
       let prefixes = parseRange(S.hub.range);
       if (!prefixes.length) prefixes = [...new Set((await localIPv4s()).filter(isPrivateIP).map((ip) => ip.split('.').slice(0, 3).join('.') + '.'))];
       if (!prefixes.length) return hint('Could not work out this network’s address range — type it under “Scan range” (e.g. 192.168.1) and try again.');
       const hosts = prefixes.flatMap((p) => Array.from({ length: 254 }, (_, k) => p + (k + 1)));
-      found = await scanLan(hosts, { onProgress: (d, n) => d % 8 === 0 && hint(`Scanning ${prefixes.join(' ')}x … ${d}/${n}`) });
+      const all = await scanLan(hosts, { onProgress: (d, n) => d % 8 === 0 && hint(`Scanning ${prefixes.join(' ')}x … ${d}/${n}`) });
+      found = all.filter((f) => nameMatch(f.name, S.hub.hubName));
+      if (!found.length && all.length) return hint(`Found ${[...new Set(all.map((f) => `“${f.name}”`))].join(', ')} but none named “${S.hub.hubName}”. Check the Hub name, or clear it to accept any hub.`);
     }
     if (!found.length) return hint('No hub found. Is it running on this Wi-Fi (port ' + S.hub.port + ')? The phone must also trust its certificate: install the hub CA once (download https://<hub-ip>:' + S.hub.port + '/ca.crt) — or type the hub address above.');
     if (found.length === 1) return useHub(found[0]);
     hint(`${found.length} hubs found — pick one:`);
-    found.forEach((f) => pick.append(Object.assign(document.createElement('button'), { textContent: `${f.host} (${f.cameras} cam)`, onclick: () => { pick.innerHTML = ''; useHub(f); } })));
+    found.forEach((f) => pick.append(Object.assign(document.createElement('button'), { textContent: `${f.name || 'hub'} · ${f.host} (${f.cameras} cam)`, onclick: () => { pick.innerHTML = ''; useHub(f); } })));
   } finally { scanning = false; }
 }
 function useHub(f) {
@@ -571,7 +578,7 @@ async function onMessage(ev) {
   let m; try { m = JSON.parse(ev.data); } catch { return; }
   try {
     switch (m.t) {
-      case 'welcome': backoff = 1000; failures = 0; libSig = ''; setConn('on', 'hub ' + S.hub.host + (m.name && m.name !== S.hub.name ? ' · as ' + m.name : '')); $('#connHint').textContent = ''; $('#pConn').open = false; sendState(); reportRec(); streamLoop(); notifyLib(); break;
+      case 'welcome': backoff = 1000; failures = 0; libSig = ''; setConn('on', (m.hub || 'hub') + ' · ' + S.hub.host + (m.name && m.name !== S.hub.name ? ' · as ' + m.name : '')); $('#connHint').textContent = ''; $('#pConn').open = false; sendState(); reportRec(); streamLoop(); notifyLib(); break;
       case 'ping': sendJSON({ t: 'pong' }); break;
       case 'get_state': sendState(); break;
       case 'set': { const e = await applySettings(m.settings || {}); if (e) sendJSON({ t: 'error', msg: e }); break; }
@@ -643,16 +650,17 @@ function readHash() {
   if (p.has('token')) S.hub.token = p.get('token');
   if (p.has('tls')) S.hub.tls = p.get('tls') !== '0';
   if (p.has('name')) S.hub.name = p.get('name');
+  if (p.has('hubname')) S.hub.hubName = p.get('hubname');
   history.replaceState(null, '', location.pathname + location.search);
   save(); return true;
 }
 function fillHub() {
   const h = S.hub; $('#hubHost').value = h.host; $('#hubPort').value = h.port; $('#hubToken').value = h.token;
-  $('#hubTls').checked = h.tls; $('#hubAuto').checked = h.auto; $('#devName').value = h.name; $('#scanRange').value = h.range || '';
+  $('#hubTls').checked = h.tls; $('#hubAuto').checked = h.auto; $('#devName').value = h.name; $('#scanRange').value = h.range || ''; $('#hubName').value = h.hubName || '';
 }
 function readHub() {
   Object.assign(S.hub, { host: $('#hubHost').value.trim(), port: Number($('#hubPort').value) || 8765, token: $('#hubToken').value.trim(),
-    tls: $('#hubTls').checked, auto: $('#hubAuto').checked, name: $('#devName').value.trim() || S.hub.name, range: $('#scanRange').value.trim() });
+    tls: $('#hubTls').checked, auto: $('#hubAuto').checked, name: $('#devName').value.trim() || S.hub.name, range: $('#scanRange').value.trim(), hubName: $('#hubName').value.trim() });
   save();
 }
 

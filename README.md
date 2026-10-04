@@ -20,6 +20,9 @@ python python/webcam_hub.py
 
 **Security defaults:** the hub is open (no token) but only accepts clients on private/LAN addresses (`--allow-public` to lift). Anyone on your LAN can then see the camera and fetch its files, so on shared networks start with `--token auto` (or `--token SECRET`); phones then need the token (field in the app, or it is in the connect link/QR).
 
+### Naming the hub (identity in the other direction)
+Give the hub a name — `python python/webcam_hub.py --name office` (default: the machine's host name; `Hub(name="office")` in Python). Phones learn it when they scan, and the app has a **Hub name** field (exact, substring or glob, e.g. `office` or `lab*`): with several hubs on the LAN it connects to the matching one, and if the hub's IP changes it re-finds it by name. The name is also in the connect link/QR (`&hubname=`) and shown in the app's status bar and the viewer's header. Cameras (phones) are named in the app, hubs on the command line, and each side selects the other by name.
+
 ### Several cameras
 Each phone is a camera with the name you gave it (duplicates get `-2`, `-3`). Pick by name — exact, case-insensitive, substring or glob:
 ```python
