@@ -99,7 +99,14 @@ The hub serves `python/viewer.html` at `/view?token=T`. It opens `wss://host/ui?
 Hub → phone: `lib_list {req}`, `lib_get {req, kind, id}`, `lib_thumb {kind, id}`, `lib_delete {items:[{kind,id}]}`.
 Phone → hub: `lib {req?, items:[{kind:'photo'|'video', id, name, type, size, ts, secs?, w?, h?}]}` (also sent unprompted whenever the library changes), `lib_thumb {kind,id,data:dataURL}`, `lib_file_end {req, push, kind, id, name, mime, size, chunks}`; binary `0x04`: `[04][req u32][idx u32][bytes]` (hub-only, never relayed to viewers). `push:true` means the phone initiated the transfer ("→ PC") and the hub stores it in `save_dir`. Hub HTTP: `/files`, `/files/<kind>/<id>`, `/files/latest`, `/files.zip`, `/snapshot` (token required; fetch-through from the phone). Viewers may send `lib_list`, `lib_thumb`, `lib_delete`.
 
-## 7. Known limits
+## 7. Discovery, multi-camera, open mode (v0.6)
+* `hello.name` is the camera name; the hub answers `welcome {name}` with the final name (suffix `-2` if another *device* already uses it; the same device reconnecting replaces its old connection).
+* `token` is optional: empty hub token = open. Clients outside private ranges (RFC1918, link-local, 100.64/10, loopback) get 403 / close code 4403 unless `allow_public`.
+* Discovery: the phone sends `{t:"probe"}` on `/ws`; a hub replies `{t:"hub", proto, tokenRequired, cameras}` and closes. The phone probes the local /24 (its address from WebRTC ICE candidates, or a typed range) over `wss`. Probing only succeeds when the phone trusts the hub certificate, hence the one-time CA install.
+* TLS: a local CA (name-constrained to private IP ranges + localhost) signs a leaf certificate for the hub's current IP, re-issued automatically when the IP changes; `/ca.crt` serves the CA.
+* Viewers: `{t:"cameras", items:[{name,ip}], selected}` from the hub, `{t:"select", camera}` to the hub; every phone→viewer relay is per selected camera. HTTP routes accept `?camera=`; `/cameras` lists them.
+
+## 8. Known limits
 * Recording is buffered in memory on the phone (fine for minutes, not hours).
 * Android may throttle the page when the screen is off; the app holds a screen wake lock.
 * Manual camera controls depend on the browser/device exposing them.

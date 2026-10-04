@@ -53,6 +53,7 @@ dialog .row{margin:10px 0 0}dialog a.btn{flex:1;text-align:center;text-decoratio
   <b>📷 Webcam viewer</b>
   <span class="tabs"><button id="tLive" class="on">Live</button><button id="tLib">Library</button></span>
   <span><span id="dot" class="dot"></span> <span id="status">connecting…</span></span>
+  <select id="camSel" hidden title="Camera"></select>
   <span id="info" class="dim"></span>
 </header>
 
@@ -118,7 +119,7 @@ const send = (o) => ws && ws.readyState === 1 && ws.send(JSON.stringify(o));
 const set = (settings) => send({ t: 'set', settings });
 
 function connect() {
-  ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ui?token=${encodeURIComponent(token)}`);
+  ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ui?token=${encodeURIComponent(token)}${new URLSearchParams(location.search).get('camera') ? '&camera=' + encodeURIComponent(new URLSearchParams(location.search).get('camera')) : ''}`);
   ws.binaryType = 'arraybuffer';
   ws.onopen = () => { $('#dot').className = 'dot wait'; $('#status').textContent = 'hub connected'; };
   ws.onclose = (e) => {
@@ -135,6 +136,7 @@ function onJSON(m) {
     case 'state': state = { ...state, ...m }; render(); break;
     case 'rec_status': recInfo = m; renderRec(); break;
     case 'rec_file_end': if (wantRec.has(m.id)) finishRec(m); break;
+    case 'cameras': setCameras(m); break;
     case 'lib': lib = m.items || []; renderLib(); break;
     case 'lib_thumb': thumbBusy = false; thumbs.set(m.kind + ':' + m.id, m.data); updateThumb(m.kind + ':' + m.id); pump(); break;
     case 'error': toast('Phone: ' + m.msg); break;
@@ -218,10 +220,21 @@ for (const k of ['facing', 'res', 'fps', 'bitrate', 'codec']) $('#' + k).onchang
 $('#audio').onchange = (e) => set({ audio: e.target.checked });
 for (const k of ['streamFps', 'streamWidth', 'streamQuality', 'snapQuality']) $('#' + k).onchange = (e) => set({ [k]: Number(e.target.value) });
 $('#stream').onchange = (e) => send({ t: 'stream', on: e.target.checked });
+// ---- several cameras ----
+let curCam = null;
+function setCameras(m) {
+  const sel = $('#camSel'), changed = curCam !== m.selected;
+  sel.innerHTML = ''; (m.items || []).forEach((c) => sel.add(new Option(`${c.name} · ${c.ip}`, c.name)));
+  sel.hidden = (m.items || []).length < 2; curCam = m.selected; if (curCam) sel.value = curCam;
+  if (!curCam && (m.items || []).length) return send({ t: 'select', camera: m.items[0].name });   // nothing chosen yet: take the first
+  if (changed) { frames = 0; ctx.clearRect(0, 0, cv.width, cv.height); lib = []; thumbs.clear(); thumbQ.length = 0; state = {}; renderLib(); if (!$('#libview').hidden) send({ t: 'lib_list', req: 0 }); }
+}
+$('#camSel').onchange = (e) => send({ t: 'select', camera: e.target.value });
+
 // ---- library tab ----
 let lib = [], libFilter = 'all', libSel = new Set(), thumbs = new Map(), thumbQ = [], thumbBusy = false;
 const ikey = (i) => i.kind + ':' + i.id;
-const q = () => `token=${encodeURIComponent(token)}`;
+const q = () => `token=${encodeURIComponent(token)}${curCam ? '&camera=' + encodeURIComponent(curCam) : ''}`;
 const fileUrl = (i, dl) => `/files/${i.kind}/${i.id}?${q()}${dl ? '&download=1' : ''}`;
 const fmt = (n) => (n > 1e6 ? (n / 1e6).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1e3)) + ' KB');
 const shown = () => lib.filter((i) => libFilter === 'all' || i.kind === libFilter);

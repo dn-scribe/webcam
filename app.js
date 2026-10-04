@@ -11,7 +11,7 @@ const DEFAULTS = {
   facing: 'environment', deviceId: '', res: '1280x720', fps: 30, audio: false, bitrate: 'medium', codec: 'auto',
   streamOn: false, streamFps: 10, streamWidth: 640, streamQuality: 0.6, snapQuality: 0.92,
   adv: {}, ui: {},
-  hub: { host: '', port: 8765, token: '', tls: true, auto: true, name: 'phone' },
+  hub: { host: '', port: 8765, token: '', tls: true, auto: true, name: 'cam-' + Math.random().toString(36).slice(2, 6), range: '' },
 };
 const CAMERA_KEYS = ['facing', 'deviceId', 'res', 'fps', 'audio'];
 const STREAM_KEYS = ['streamFps', 'streamWidth', 'streamQuality', 'snapQuality'];
@@ -463,6 +463,61 @@ function setConn(state, text) {
 function hubUrl(scheme) {
   const h = S.hub; return `${scheme}://${h.host}:${h.port}`;
 }
+// ---- LAN discovery: find the hub by probing the local /24 (works once the phone trusts the hub's certificate) ----
+function localIPv4s() {
+  return new Promise((res) => {
+    const ips = new Set(); let pc;
+    try { pc = new RTCPeerConnection({ iceServers: [] }); } catch { return res([]); }
+    const fin = () => { try { pc.close(); } catch {} res([...ips]); };
+    pc.createDataChannel('x');
+    pc.onicecandidate = (e) => { if (!e.candidate) return fin(); const m = /(\d+\.\d+\.\d+\.\d+)/.exec(e.candidate.candidate); if (m && !m[1].startsWith('0.')) ips.add(m[1]); };
+    pc.createOffer().then((o) => pc.setLocalDescription(o)).catch(fin); setTimeout(fin, 2500);
+  });
+}
+const isPrivateIP = (ip) => /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(ip);
+const parseRange = (txt) => (txt || '').split(/[,\s]+/).map((x) => /^(\d+\.\d+\.\d+)(\.\d+(\/\d+)?)?\.?$/.exec(x.trim())).filter(Boolean).map((m) => m[1] + '.');
+function probeHost(host, port, tls, timeout = 2500) {
+  return new Promise((res) => {
+    let done = false, sock; const fin = (v) => { if (done) return; done = true; clearTimeout(t); try { sock.close(); } catch {} res(v); };
+    const t = setTimeout(() => fin(null), timeout);
+    try { sock = new WebSocket(`${tls ? 'wss' : 'ws'}://${host}:${port}/ws`); } catch { return res(null); }
+    sock.onopen = () => sock.send(JSON.stringify({ t: 'probe' }));
+    sock.onmessage = (e) => { try { const m = JSON.parse(e.data); fin(m.t === 'hub' ? { host, ...m } : null); } catch { fin(null); } };
+    sock.onerror = () => fin(null); sock.onclose = () => fin(null);
+  });
+}
+async function scanLan(hosts, { port = S.hub.port, tls = S.hub.tls, conc = 48, onProgress } = {}) {
+  const found = []; let i = 0, done = 0;
+  await Promise.all(Array.from({ length: Math.min(conc, hosts.length) }, async () => {
+    while (i < hosts.length) { const h = hosts[i++]; const r = await probeHost(h, port, tls); if (r) found.push(r); onProgress && onProgress(++done, hosts.length); }
+  }));
+  return found;
+}
+let scanning = false;
+async function findHub() {
+  if (scanning) return; scanning = true; readHub();
+  const hint = (t) => ($('#connHint').textContent = t), pick = $('#hubPick'); pick.innerHTML = '';
+  try {
+    let found = [];
+    if (S.hub.host) { hint(`Trying ${S.hub.host}…`); const r = await probeHost(S.hub.host, S.hub.port, S.hub.tls); if (r) found = [r]; }
+    if (!found.length) {
+      let prefixes = parseRange(S.hub.range);
+      if (!prefixes.length) prefixes = [...new Set((await localIPv4s()).filter(isPrivateIP).map((ip) => ip.split('.').slice(0, 3).join('.') + '.'))];
+      if (!prefixes.length) return hint('Could not work out this network’s address range — type it under “Scan range” (e.g. 192.168.1) and try again.');
+      const hosts = prefixes.flatMap((p) => Array.from({ length: 254 }, (_, k) => p + (k + 1)));
+      found = await scanLan(hosts, { onProgress: (d, n) => d % 8 === 0 && hint(`Scanning ${prefixes.join(' ')}x … ${d}/${n}`) });
+    }
+    if (!found.length) return hint('No hub found. Is it running on this Wi-Fi (port ' + S.hub.port + ')? The phone must also trust its certificate: install the hub CA once (download https://<hub-ip>:' + S.hub.port + '/ca.crt) — or type the hub address above.');
+    if (found.length === 1) return useHub(found[0]);
+    hint(`${found.length} hubs found — pick one:`);
+    found.forEach((f) => pick.append(Object.assign(document.createElement('button'), { textContent: `${f.host} (${f.cameras} cam)`, onclick: () => { pick.innerHTML = ''; useHub(f); } })));
+  } finally { scanning = false; }
+}
+function useHub(f) {
+  S.hub.host = f.host; if (f.tokenRequired && !S.hub.token) { $('#connHint').textContent = `Hub ${f.host} requires a token — enter it and press Connect.`; fillHub(); save(); return; }
+  save(); fillHub(); $('#connHint').textContent = `Found hub ${f.host}`; $('#btnConnect').textContent = 'Disconnect'; backoff = 1000; failures = 0; connect();
+}
+
 async function probe() {
   const h = S.hub, ctl = new AbortController(), t = setTimeout(() => ctl.abort(), 5000);
   try { await fetch(`https://${h.host}:${h.port}/`, { mode: 'no-cors', cache: 'no-store', signal: ctl.signal }); return 'ok'; }
@@ -502,6 +557,7 @@ function connect() {
     clearTimeout(streamTimer); setConn('off', 'offline'); $('#btnConnect').textContent = wantConn && h.auto ? 'Disconnect' : 'Connect'; ws = null;
     if (e.code === 4401) { $('#connHint').textContent = 'Hub rejected the token.'; wantConn = false; return; }
     if (!was && !failures++) diagnose();          // first failure of a run: explain why
+    if (!was && failures === 3 && h.auto) findHub();  // IP may have changed (DHCP): look for the hub again
     if (wantConn && h.auto) {
       const wait = backoff; reconnectTimer = setTimeout(connect, wait); backoff = Math.min(backoff * 1.6, 10000);
       setConn('off', `offline · attempt ${failures} failed (${dt} ms, code ${e.code}) · retry ${Math.round(wait / 1000)}s`);
@@ -515,7 +571,7 @@ async function onMessage(ev) {
   let m; try { m = JSON.parse(ev.data); } catch { return; }
   try {
     switch (m.t) {
-      case 'welcome': backoff = 1000; failures = 0; libSig = ''; setConn('on', 'hub ' + S.hub.host); $('#connHint').textContent = ''; $('#pConn').open = false; sendState(); reportRec(); streamLoop(); notifyLib(); break;
+      case 'welcome': backoff = 1000; failures = 0; libSig = ''; setConn('on', 'hub ' + S.hub.host + (m.name && m.name !== S.hub.name ? ' · as ' + m.name : '')); $('#connHint').textContent = ''; $('#pConn').open = false; sendState(); reportRec(); streamLoop(); notifyLib(); break;
       case 'ping': sendJSON({ t: 'pong' }); break;
       case 'get_state': sendState(); break;
       case 'set': { const e = await applySettings(m.settings || {}); if (e) sendJSON({ t: 'error', msg: e }); break; }
@@ -592,11 +648,11 @@ function readHash() {
 }
 function fillHub() {
   const h = S.hub; $('#hubHost').value = h.host; $('#hubPort').value = h.port; $('#hubToken').value = h.token;
-  $('#hubTls').checked = h.tls; $('#hubAuto').checked = h.auto; $('#devName').value = h.name;
+  $('#hubTls').checked = h.tls; $('#hubAuto').checked = h.auto; $('#devName').value = h.name; $('#scanRange').value = h.range || '';
 }
 function readHub() {
   Object.assign(S.hub, { host: $('#hubHost').value.trim(), port: Number($('#hubPort').value) || 8765, token: $('#hubToken').value.trim(),
-    tls: $('#hubTls').checked, auto: $('#hubAuto').checked, name: $('#devName').value.trim() || 'phone' });
+    tls: $('#hubTls').checked, auto: $('#hubAuto').checked, name: $('#devName').value.trim() || S.hub.name, range: $('#scanRange').value.trim() });
   save();
 }
 
@@ -615,15 +671,17 @@ $('#chkStream').onchange = (e) => applySettings({ streamOn: e.target.checked });
   const [id, key] = s.split(':'); $('#' + id).onchange = (e) => applySettings({ [key]: Number(e.target.value) });
 });
 $('#btnConnect').onclick = () => { readHub(); if (wantConn && ws) { disconnect(); $('#btnConnect').textContent = 'Connect'; } else { backoff = 1000; failures = 0; connect(); $('#btnConnect').textContent = 'Disconnect'; } };
+$('#btnFind').onclick = () => findHub();
 $('#btnTest').onclick = () => { readHub(); diagnose(); };
 $('#btnUpdate').onclick = () => { toast('Clearing cache…'); clearAllAndReload(); };
 $('#btnInstall').onclick = async () => { if (deferredInstall) { deferredInstall.prompt(); deferredInstall = null; } };
 
 (async function init() {
   const fromHash = readHash();
-  fillHub(); syncUI(); recUI(); initWidgets(); loadRecs(); await initSW();
+  fillHub(); save(); syncUI(); recUI(); initWidgets(); loadRecs(); await initSW();
   try { await startCamera(); } catch {}
+  if (!fromHash && !S.hub.host) setTimeout(findHub, 1500);   // nothing saved yet: look for a hub on the LAN
   if (fromHash || (S.hub.host && S.hub.auto && localStorage.getItem('webcam.wasConnected') === '1')) { $('#btnConnect').textContent = 'Disconnect'; connect(); }
-  window.webcam = { S, applySettings, snap, connect, disconnect }; // debugging / tests
+  window.webcam = { S, applySettings, snap, connect, disconnect, findHub, scanLan, probeHost }; // debugging / tests
 })();
 })();

@@ -5,25 +5,29 @@ Turn an Android phone into a LAN camera, driven from a Python app. Pure-JS page,
 **App:** https://dn-scribe.github.io/webcam/  ·  **Spec:** [docs/SPEC.md](docs/SPEC.md)
 
 ## Why the phone connects to Python (not the other way round)
-A web page cannot listen on a port. So the Python **hub** listens on the port you choose and prints its address + QR; the phone connects out to it over `wss://` on your LAN.
+A web page cannot listen on a port, so the Python **hub** listens and the phone connects out to it over `wss://` on your LAN. **TLS can't be dropped**: the browser only allows camera access, and a page served over HTTPS may only open `wss://` sockets. What *is* optional is everything else: **no token and no pairing by default**.
 
-## Quick start
+## Quick start (out of the box)
 ```bash
 pip install websockets cryptography qrcode
-python python/webcam_hub.py --port 8765
+python python/webcam_hub.py
 ```
-1. On the phone (same Wi-Fi), open the `https://<ip>:<port>/` link the hub prints and accept the self-signed cert warning **once**.
-2. Open the app link / scan the QR (or open https://dn-scribe.github.io/webcam/ and type address, port, token). Menu → **Install app** / *Add to Home screen*.
-3. Use the CLI (`snap`, `rec start`, `rec stop`, `stream on 10`, `set res=1920x1080 torch=true`) or the API:
+1. **Once per phone** – make the phone trust the hub (pick one):
+   * *Best:* download `https://<hub-ip>:8765/ca.crt` and install it (Android: Settings → Security → Encryption & credentials → Install a certificate → CA certificate). No more warnings, ever, and the phone can auto-discover the hub. The CA is name-constrained to private addresses, and the hub re-issues its certificate automatically when its IP changes.
+   * *Quick:* open `https://<hub-ip>:8765/` and accept the warning.
+2. Open https://dn-scribe.github.io/webcam/ (install it as an app). It **looks for the hub on the LAN by itself** (button *Find hub on LAN*; re-scans automatically if the hub's IP changes). Set a **camera name** (e.g. `kitchen`) in the Connection panel.
+3. Use the viewer, CLI or API.
 
+**Security defaults:** the hub is open (no token) but only accepts clients on private/LAN addresses (`--allow-public` to lift). Anyone on your LAN can then see the camera and fetch its files, so on shared networks start with `--token auto` (or `--token SECRET`); phones then need the token (field in the app, or it is in the connect link/QR).
+
+### Several cameras
+Each phone is a camera with the name you gave it (duplicates get `-2`, `-3`). Pick by name — exact, case-insensitive, substring or glob:
 ```python
-from webcam_hub import Hub
-hub = Hub(port=8765).start(); hub.wait_for_phone()
-hub.set(res="1920x1080"); open("a.jpg","wb").write(hub.snapshot())
-hub.stream(True, fps=10); frame = hub.latest_frame(wait=2)   # JPEG bytes
-hub.rec_start(); ...; data, name = hub.rec_stop_and_fetch()
+hub.cameras()                       # [{'name': 'kitchen', 'ip': ...}, ...]
+hub.camera("kitchen").snapshot()    # a view that routes every call to that camera
+hub.snapshot(camera="gar*"); hub.use("kitchen")     # or set a default
 ```
-Use `--cert/--key` (e.g. mkcert) for a trusted cert; `--serve-app` makes the hub serve the app itself (camera works, but no offline install because of the self-signed cert).
+CLI: `cams`, `use kitchen`, `--camera kitchen`, `--all-cameras --expect 3 --pull` (own sub-folder each). HTTP: `/cameras`, and `?camera=NAME` on every route. The viewer gets a camera picker when more than one is connected (`/view?camera=kitchen` preselects).
 
 ## Browser viewer (mirror on the PC)
 The hub serves a page that mirrors the phone: `python python/webcam_hub.py --open` (or open `https://localhost:8765/view?token=<token>`, printed at start-up). It shows the live view, Snap / Record / Get-recording (downloads in the browser), and every camera, recording and stream setting, kept in sync both ways with the phone. The phone's preview stream is switched on automatically while a viewer is open. Keys: Space = snap, R = record. From Python: `hub.open_viewer()`.
@@ -48,7 +52,7 @@ Everything the phone has saved (see Library below) can be pulled to the PC four 
 | **Phone app** | Library → tap an item (or **Select**) → **→ PC** pushes it to the hub's folder |
 | **Command line** | `python python/webcam_hub.py --pull --out photos [--kind photo\|video] [--delete-after]` downloads everything and exits (`--list` just lists). Interactive prompt: `ls`, `get <#\|name\|latest\|all>`, `pull`, `rm <#>` |
 | **Python API** | `hub.library()`, `hub.download("latest", "out_dir")`, `hub.download_all("out_dir", kind="video", delete_after=False)`, `hub.delete(items)`; pushed files fire `hub.on_file(path, meta)` |
-| **HTTP** (curl, any language) | `curl -k "https://IP:PORT/files?token=T"` list · `/files/photo/<id>` · `/files/latest?kind=video` · `/files.zip[?kind=photo]` · `/snapshot` (fresh JPEG). Add `&download=1` for a save-as header; token may also be sent as `Authorization: Bearer T` |
+| **HTTP** (curl, any language) | `curl -k "https://IP:PORT/files?camera=kitchen"` list · `/files/photo/<id>` · `/files/latest?kind=video` · `/files.zip[?kind=photo]` · `/snapshot` (fresh JPEG). Add `&download=1` for a save-as header. If the hub was started with `--token`, add `?token=T` (or `Authorization: Bearer T`) |
 
 Downloads are verified (size check) and written via a `.part` file; `download_all` skips files already present and never overwrites different files that share a name.
 
