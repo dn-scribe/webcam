@@ -190,28 +190,19 @@ function grab(maxW, quality) {
   scratch.getContext('2d').drawImage(video, 0, 0, scratch.width, scratch.height);
   return new Promise((res, rej) => scratch.toBlob((b) => (b ? res({ blob: b, w: scratch.width, h: scratch.height }) : rej(new Error('encode failed'))), 'image/jpeg', quality));
 }
-const gallery = [];
+let snaps = [], snapSeq = 0;   // persisted photos, newest first
 async function snap(quality, id) {
   const { blob, w, h } = await grab(0, quality ?? S.snapQuality);
-  const name = `snap-${stamp()}.jpg`, url = URL.createObjectURL(blob);
-  gallery.unshift({ url, name }); if (gallery.length > 24) URL.revokeObjectURL(gallery.pop().url);
-  renderGallery(); flash();
+  const ts = Date.now(), item = { id: ts * 100 + (snapSeq++ % 100), kind: 'photo', name: `snap-${stamp()}.jpg`, type: 'image/jpeg', size: blob.size, ts, w, h, blob };
+  snaps.unshift(item); idb.put('snaps', item).catch(() => {}); renderLib(); storageInfo(); flash();
   if (id != null && wsOpen()) {
     sendJSON({ t: 'snap_meta', id, w, h, size: blob.size, mime: 'image/jpeg' });
     const head = new Uint8Array(5); head[0] = 2; new DataView(head.buffer).setUint32(1, id);
     ws.send(new Blob([head, blob]));
   }
-  return { blob, name };
+  return { blob, name: item.name };
 }
 function flash() { video.style.opacity = 0.3; setTimeout(() => (video.style.opacity = 1), 90); }
-function renderGallery() {
-  const g = $('#gallery'); g.innerHTML = '';
-  gallery.forEach(({ url, name }) => {
-    const a = Object.assign(document.createElement('a'), { href: url, download: name });
-    a.append(Object.assign(document.createElement('img'), { src: url })); g.append(a);
-  });
-  $('#galCount').textContent = gallery.length ? `(${gallery.length})` : '';
-}
 
 // ---------- streaming ----------
 let streamTimer, inflight = false;
@@ -236,8 +227,11 @@ let recs = [];   // finished recordings' metadata, newest first
 const idb = (() => {
   let dbp;
   const open = () => dbp || (dbp = new Promise((res, rej) => {
-    const r = indexedDB.open('webcam', 1);
-    r.onupgradeneeded = () => { r.result.createObjectStore('chunks', { keyPath: ['rec', 'idx'] }); r.result.createObjectStore('recs', { keyPath: 'id' }); };
+    const r = indexedDB.open('webcam', 2);
+    r.onupgradeneeded = () => { const db = r.result, has = (n) => db.objectStoreNames.contains(n);
+      if (!has('chunks')) db.createObjectStore('chunks', { keyPath: ['rec', 'idx'] });
+      if (!has('recs')) db.createObjectStore('recs', { keyPath: 'id' });
+      if (!has('snaps')) db.createObjectStore('snaps', { keyPath: 'id' }); };
     r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
   }));
   const run = async (store, mode, fn) => { const db = await open(); return new Promise((res, rej) => {
@@ -247,6 +241,7 @@ const idb = (() => {
     put: (store, v) => run(store, 'readwrite', (st) => st.put(v)),
     all: (store) => run(store, 'readonly', (st) => st.getAll()),
     chunks: (rec) => run('chunks', 'readonly', (st) => st.getAll(IDBKeyRange.bound([rec, 0], [rec, Infinity]))),
+    delSnap: (id) => run('snaps', 'readwrite', (st) => st.delete(id)),
     del: async (rec) => { await run('chunks', 'readwrite', (st) => st.delete(IDBKeyRange.bound([rec, 0], [rec, Infinity]))); await run('recs', 'readwrite', (st) => st.delete(rec)); },
   };
 })();
@@ -276,10 +271,11 @@ function startRec() {
     const type = recorder.mimeType || mime || 'video/webm', started = recStart;
     recorder = null; recUI();
     await Promise.all(recWrites);
-    const meta = { id, type, name: `rec-${stamp()}.${type.includes('mp4') ? 'mp4' : 'webm'}`, size: recSize, secs: (Date.now() - started) / 1000, ts: Date.now() };
+    let thumb = null; try { thumb = (await grab(240, 0.6)).blob; } catch {}
+    const meta = { id, kind: 'video', thumb, type, name: `rec-${stamp()}.${type.includes('mp4') ? 'mp4' : 'webm'}`, size: recSize, secs: (Date.now() - started) / 1000, ts: Date.now() };
     if (recMem.length) { meta.mem = new Blob(recMem.sort((a, b) => a.idx - b.idx).map((c) => c.blob), { type }); }  // IndexedDB failed: keep in RAM
     else await idb.put('recs', meta).catch(() => {});
-    recs.unshift(meta); lastRec = meta; recUI(); renderRecs(); reportRec(); toast(`Recorded ${(meta.size / 1e6).toFixed(1)} MB`); storageInfo();
+    recs.unshift(meta); lastRec = meta; recUI(); renderLib(); reportRec(); toast(`Recorded ${(meta.size / 1e6).toFixed(1)} MB`); storageInfo();
   };
   recorder.start(1000); recStart = Date.now();
   recTick = setInterval(() => { recUI(); reportRec(); }, 1000);
@@ -312,32 +308,91 @@ async function sendRecording(id) {
   }
   sendJSON({ t: 'rec_file_end', id: meta.id, size: blob.size, mime: meta.type, chunks: idx, name: meta.name });
 }
-async function shareRec(meta) {
-  const file = new File([await blobOf(meta)], meta.name, { type: meta.type });
-  if (navigator.canShare && navigator.canShare({ files: [file] })) await navigator.share({ files: [file], title: meta.name });
+// ---------- library (videos + photos) ----------
+const itemKey = (i) => `${i.kind}:${i.id}`;
+const allItems = () => [...recs, ...snaps].sort((a, b) => b.ts - a.ts);
+const blobOfItem = (i) => (i.kind === 'photo' ? Promise.resolve(i.blob) : blobOf(i));
+let libFilter = 'all', selMode = false; const sel = new Set(), thumbUrls = new Map();
+function thumbUrl(i) {
+  const k = itemKey(i); if (thumbUrls.has(k)) return thumbUrls.get(k);
+  const src = i.kind === 'photo' ? i.blob : i.thumb, u = src ? URL.createObjectURL(src) : null;
+  thumbUrls.set(k, u); return u;
+}
+function forgetItem(i) { const u = thumbUrls.get(itemKey(i)); if (u) URL.revokeObjectURL(u); thumbUrls.delete(itemKey(i)); sel.delete(itemKey(i)); }
+const fmtSize = (n) => (n > 1e6 ? (n / 1e6).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1e3)) + ' KB');
+const fmtDur = (s) => `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, '0')}`;
+const guard = (fn) => (...a) => fn(...a).catch((e) => e.name !== 'AbortError' && toast(String(e.message || e)));
+
+async function shareItems(items) {
+  const files = await Promise.all(items.map(async (i) => new File([await blobOfItem(i)], i.name, { type: i.type })));
+  if (navigator.canShare && navigator.canShare({ files })) await navigator.share({ files, title: files.length === 1 ? files[0].name : `${files.length} files` });
   else toast('Sharing files is not supported here — use Download');
 }
-async function deleteRec(meta) {
-  await idb.del(meta.id).catch(() => {}); recs = recs.filter((r) => r !== meta);
-  if (lastRec === meta) lastRec = recs[0] || null;
-  renderRecs(); recUI(); storageInfo();
+async function downloadItems(items) { for (const i of items) { download(await blobOfItem(i), i.name); if (items.length > 1) await new Promise((r) => setTimeout(r, 400)); } }
+async function deleteItems(items, ask = true) {
+  if (!items.length || (ask && !confirm(`Delete ${items.length === 1 ? items[0].name : items.length + ' items'}? This cannot be undone.`))) return;
+  for (const i of items) {
+    if (i.kind === 'photo') { await idb.delSnap(i.id).catch(() => {}); snaps = snaps.filter((x) => x !== i); }
+    else { await idb.del(i.id).catch(() => {}); recs = recs.filter((x) => x !== i); if (lastRec === i) lastRec = recs[0] || null; }
+    forgetItem(i);
+  }
+  renderLib(); recUI(); storageInfo();
 }
-function renderRecs() {
-  const box = $('#recList'); box.innerHTML = '';
-  $('#recCount').textContent = recs.length ? `(${recs.length})` : '';
-  if (!recs.length) box.innerHTML = '<p class="hint">No recordings yet.</p>';
-  for (const r of recs) {
-    const row = document.createElement('div'); row.className = 'rec-row';
-    const info = document.createElement('span'); info.textContent = `${r.name} · ${Math.round(r.secs)}s · ${(r.size / 1e6).toFixed(1)} MB`;
-    const mk = (txt, fn) => Object.assign(document.createElement('button'), { textContent: txt, onclick: () => fn().catch((e) => e.name !== 'AbortError' && toast(String(e.message || e))) });
-    row.append(info, mk('⬇', async () => download(await blobOf(r), r.name)), mk('↗', () => shareRec(r)), mk('🗑', () => deleteRec(r)));
-    box.append(row);
+async function renameItem(i) {
+  const dot = i.name.lastIndexOf('.'), ext = dot > 0 ? i.name.slice(dot) : '', base = dot > 0 ? i.name.slice(0, dot) : i.name;
+  const n = prompt('Rename', base); if (n === null) return;
+  const clean = n.trim().replace(/[\\/:*?"<>|]/g, '_'); if (!clean) return;
+  i.name = clean + ext;
+  if (i.kind === 'photo') await idb.put('snaps', i); else { const { mem, ...m } = i; await idb.put('recs', m); }
+  renderLib();
+}
+function renderLib() {
+  const items = allItems(), shown = items.filter((i) => libFilter === 'all' || (libFilter === 'video') === (i.kind === 'video'));
+  $('#libCount').textContent = items.length ? `(${recs.length} 🎞 · ${snaps.length} 📷)` : '';
+  document.querySelectorAll('#libFilter button').forEach((b) => b.classList.toggle('on', b.dataset.f === libFilter));
+  $('#libSelect').textContent = selMode ? 'Done' : 'Select';
+  $('#libActions').hidden = !selMode; $('#libSelN').textContent = `${sel.size} selected`;
+  ['#libDl', '#libShare', '#libDel'].forEach((b) => ($(b).disabled = !sel.size));
+  const grid = $('#libGrid'); grid.innerHTML = '';
+  if (!shown.length) grid.innerHTML = '<p class="hint">Nothing here yet — take a snapshot or record a clip.</p>';
+  for (const i of shown) {
+    const card = document.createElement('div'); card.className = 'card' + (sel.has(itemKey(i)) ? ' sel' : '');
+    const u = thumbUrl(i);
+    card.innerHTML = (u ? `<img src="${u}" alt="">` : '<div class="noimg">🎞</div>') +
+      (i.kind === 'video' ? `<span class="tag">▶ ${fmtDur(i.secs || 0)}</span>` : '') + (selMode ? `<span class="chk">${sel.has(itemKey(i)) ? '✔' : ''}</span>` : '') +
+      `<div class="cap"></div>`;
+    card.querySelector('.cap').textContent = `${i.name.replace(/^(snap|rec)-/, '')} · ${fmtSize(i.size)}`;
+    card.onclick = () => { if (selMode) { sel.has(itemKey(i)) ? sel.delete(itemKey(i)) : sel.add(itemKey(i)); renderLib(); } else openPreview(i); };
+    grid.append(card);
   }
 }
+let pvUrl = null;
+async function openPreview(i) {
+  const dlg = $('#preview'), body = $('#pvBody'); body.innerHTML = '';
+  const blob = await blobOfItem(i); pvUrl = URL.createObjectURL(blob);
+  const el = document.createElement(i.kind === 'photo' ? 'img' : 'video'); el.src = pvUrl;
+  if (i.kind === 'video') Object.assign(el, { controls: true, autoplay: false, playsInline: true });
+  body.append(el); $('#pvName').textContent = `${i.name} · ${fmtSize(i.size)}`;
+  $('#pvDl').onclick = guard(() => downloadItems([i])); $('#pvShare').onclick = guard(() => shareItems([i]));
+  $('#pvRename').onclick = guard(async () => { await renameItem(i); $('#pvName').textContent = `${i.name} · ${fmtSize(i.size)}`; });
+  $('#pvDel').onclick = guard(async () => { await deleteItems([i]); if (!allItems().includes(i)) dlg.close(); });
+  dlg.showModal();
+}
+$('#preview').addEventListener('close', () => { if (pvUrl) URL.revokeObjectURL(pvUrl); pvUrl = null; $('#pvBody').innerHTML = ''; });
+$('#pvClose').onclick = () => $('#preview').close();
+document.querySelectorAll('#libFilter button').forEach((b) => (b.onclick = () => { libFilter = b.dataset.f; renderLib(); }));
+$('#libSelect').onclick = () => { selMode = !selMode; sel.clear(); renderLib(); };
+$('#libAll').onclick = () => { const shown = [...document.querySelectorAll('#libGrid .card')].length; const items = allItems().filter((i) => libFilter === 'all' || (libFilter === 'video') === (i.kind === 'video')); items.length && sel.size === items.length ? sel.clear() : items.forEach((i) => sel.add(itemKey(i))); renderLib(); };
+const selected = () => allItems().filter((i) => sel.has(itemKey(i)));
+$('#libDl').onclick = guard(() => downloadItems(selected()));
+$('#libShare').onclick = guard(() => shareItems(selected()));
+$('#libDel').onclick = guard(() => deleteItems(selected()));
+
 async function storageInfo() {
   try {
     const e = await navigator.storage.estimate(); const persisted = navigator.storage.persisted ? await navigator.storage.persisted() : false;
-    $('#storInfo').textContent = `Phone storage: recordings use ${(recs.reduce((a, r) => a + r.size, 0) / 1e6).toFixed(0)} MB · app quota ${(e.usage / 1e6).toFixed(0)} / ${(e.quota / 1e9).toFixed(1)} GB${persisted ? ' · protected' : ''}`;
+    const mine = [...recs, ...snaps].reduce((a, r) => a + r.size, 0);
+    $('#storInfo').textContent = `Phone storage: library uses ${(mine / 1e6).toFixed(0)} MB · app quota ${(e.usage / 1e6).toFixed(0)} / ${(e.quota / 1e9).toFixed(1)} GB${persisted ? ' · protected' : ''}`;
   } catch {}
 }
 async function loadRecs() {
@@ -348,12 +403,14 @@ async function loadRecs() {
     const orphan = new Map();
     for (const c of await idb.all('chunks')) if (!have.has(c.rec)) { const o = orphan.get(c.rec) || { size: 0, type: c.blob.type }; o.size += c.blob.size; orphan.set(c.rec, o); }
     for (const [id, o] of orphan) {
-      const type = o.type || 'video/webm', m = { id, type, size: o.size, secs: 0, ts: id * 1000, name: `recovered-${id}.${type.includes('mp4') ? 'mp4' : 'webm'}` };
+      const type = o.type || 'video/webm', m = { id, kind: 'video', type, size: o.size, secs: 0, ts: id * 1000, name: `recovered-${id}.${type.includes('mp4') ? 'mp4' : 'webm'}` };
       await idb.put('recs', m); metas.push(m);
     }
+    metas.forEach((m) => (m.kind = 'video'));
     recs = metas.sort((a, b) => b.ts - a.ts); lastRec = recs[0] || null;
+    snaps = (await idb.all('snaps')).sort((a, b) => b.ts - a.ts);
   } catch {}
-  renderRecs(); recUI(); storageInfo();
+  renderLib(); recUI(); storageInfo();
 }
 
 // ---------- hub connection ----------
@@ -433,7 +490,7 @@ async function onMessage(ev) {
         if (m.action === 'start') e = startRec();
         else if (m.action === 'stop') stopRec();
         else if (m.action === 'send') await sendRecording(m.id);
-        else if (m.action === 'discard') { const r = recs.find((x) => x.id === m.id) || lastRec; if (r) await deleteRec(r); }
+        else if (m.action === 'discard') { const r = recs.find((x) => x.id === m.id) || lastRec; if (r) await deleteItems([r], false); }
         if (e) sendJSON({ t: 'error', id: m.id, msg: e });
         break;
       }

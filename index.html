@@ -55,7 +55,7 @@
       <p id="connHint" class="hint"></p>
     </details>
 
-    <details id="pCam" open>
+    <details id="pCam">
       <summary>Camera settings</summary>
       <div class="grid">
         <label>Camera <select id="selDevice"></select></label>
@@ -88,16 +88,19 @@
       </div>
     </details>
 
-    <details id="pRecs">
-      <summary>Recordings <span id="recCount"></span></summary>
+    <details id="pLib" open>
+      <summary>Library <span id="libCount"></span></summary>
       <p id="storInfo" class="hint"></p>
-      <div id="recList"></div>
-      <p class="hint">Recordings are written to the phone’s app storage while recording, so they survive a crash or app kill. ⬇ saves to Downloads, ↗ shares to Files/Drive/other apps.</p>
-    </details>
-
-    <details id="pGal">
-      <summary>Snapshots <span id="galCount"></span></summary>
-      <div id="gallery" class="gallery"></div>
+      <div class="libbar">
+        <div id="libFilter"><button data-f="all" class="on">All</button><button data-f="video">🎞 Clips</button><button data-f="photo">📷 Photos</button></div>
+        <button id="libSelect">Select</button>
+      </div>
+      <div id="libActions" class="libbar" hidden>
+        <button id="libAll">All</button><span id="libSelN" class="hint"></span>
+        <button id="libDl" disabled>⬇</button><button id="libShare" disabled>↗</button><button id="libDel" disabled>🗑</button>
+      </div>
+      <div id="libGrid" class="libgrid"></div>
+      <p class="hint">Snapshots and clips are saved in the phone’s app storage (crash-safe). Tap one to preview, rename, share or delete; ⬇ saves to Downloads, ↗ shares to Files/Drive/other apps.</p>
     </details>
 
     <details id="pApp">
@@ -112,6 +115,11 @@
     </details>
   </section>
 </main>
+<dialog id="preview">
+  <div id="pvBody"></div>
+  <p id="pvName" class="hint"></p>
+  <div class="actions"><button id="pvDl">⬇ Download</button><button id="pvShare">↗ Share</button><button id="pvRename">✎ Rename</button><button id="pvDel">🗑 Delete</button><button id="pvClose">Close</button></div>
+</dialog>
 <script src="version.js"></script>
 <script src="app.js"></script>
 </body>

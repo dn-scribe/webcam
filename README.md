@@ -39,5 +39,8 @@ Draggable, rotatable control toolbar and quick camera panel (zoom/torch/exposure
 ## GitHub Pages
 Repo → Settings → Pages → Source: **GitHub Actions**. (`.github/workflows/pages.yml`)
 
+## Library (clips + photos)
+Snapshots are now saved in the phone's app storage just like recordings. The **Library** panel lists clips and photos together with thumbnails: filter (All / Clips / Photos), tap to preview, rename, download, share or delete, or tap **Select** for bulk download/share/delete.
+
 ## Recordings & compression
 Recording chunks are written to the phone's IndexedDB while recording (crash-safe, not held in RAM; interrupted recordings are recovered on next launch). Quality/bitrate (1–10 Mbps) and codec (H.264 mp4 or smaller VP9 webm) are selectable in the app or via the hub (`set bitrate=low codec=vp9`). ⬇ downloads, ↗ shares to Files/Drive, 🗑 deletes.
