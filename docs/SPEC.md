@@ -42,7 +42,7 @@ Everything else is optional: the token is off by default, and no pairing step is
 | Area | Feature |
 |---|---|
 | Camera | front/back/device, resolution, fps, microphone; every capability the browser reports for the track, rendered dynamically (zoom, torch, exposure mode/compensation/time, focus mode/distance, white balance/temperature, ISO, brightness, contrast, saturation, sharpness) |
-| UI | draggable + rotatable toolbar and quick panel, full-screen view, positions persisted |
+| UI | camera screen: video maximal, controls docked around it (CSS grid: top bar, view, quick strip, action row; action column on the right in landscape); settings sheet; pinch-to-zoom; optional floating draggable layout; preview Fit/Fill |
 | Snapshots | JPEG at native resolution, quality setting; saved to the phone library; hub may request one |
 | Recording | MediaRecorder (H.264 mp4 if supported, else VP9/VP8 webm); bitrate 1/2.5/5/10 Mbps; chunks persisted to IndexedDB, crash recovery |
 | Library | photos + clips in one list: thumbnails, preview, rename, share, download, delete, multi-select, push to hub |

@@ -61,3 +61,34 @@ dialog{background:var(--card);color:var(--fg);border:1px solid var(--line);borde
 dialog::backdrop{background:#000c}
 #pvBody img,#pvBody video{width:100%;max-height:60vh;object-fit:contain;background:#000;border-radius:8px;display:block}
 [hidden]{display:none!important}
+
+/* ---- camera screen: view maximal, immediate controls docked around it ---- */
+html,body{height:100%;overflow:hidden}
+main.stage{max-width:none;margin:0;padding:0;display:grid;height:100dvh;background:#000;
+  grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr) auto auto;grid-template-areas:"view" "quick" "act"}
+.stage .view{grid-area:view;aspect-ratio:auto;max-height:none;min-height:0;height:100%;touch-action:none}
+.stage #quick{grid-area:quick}.stage #actions{grid-area:act}
+.hud{padding-top:max(6px,env(safe-area-inset-top))}
+.stage:not(.free) .widget{position:static;border:0;border-radius:0;background:#0b0d10;backdrop-filter:none;padding:8px 12px}
+.stage:not(.free) .grip,.stage:not(.free) .rot{display:none}
+.stage:not(.free) #actions{justify-content:space-around;align-items:center;gap:8px;padding-bottom:max(8px,env(safe-area-inset-bottom))}
+.stage:not(.free) #actions button.big{flex:1;max-width:96px;height:64px;font-size:26px;width:auto}
+.stage:not(.free) #actions #btnSnap{flex:none;width:84px;max-width:none;height:84px;border-radius:50%;background:#fff;color:#111;border:5px solid #9aa4af}
+.stage:not(.free) #actions #btnSnap small{color:#444}
+.stage:not(.free) #quickBody{flex:1;display:flex;gap:18px;align-items:center;overflow-x:auto;width:100%}
+.stage:not(.free) #quick label{flex:1;min-width:130px;font-size:12px}
+.stage:not(.free) #quick{padding-top:4px;padding-bottom:0}
+.stage.free .widget{position:absolute}
+@media (orientation:landscape){
+  main.stage{grid-template-columns:minmax(0,1fr) auto;grid-template-rows:minmax(0,1fr) auto;grid-template-areas:"view act" "quick act"}
+  .stage:not(.free) #actions{flex-direction:column;justify-content:center;padding:8px 14px;padding-right:max(14px,env(safe-area-inset-right))}
+  .stage:not(.free) #actions button.big{flex:none;width:76px;height:54px;max-width:none}
+  .stage:not(.free) #actions #btnSnap{width:74px;height:74px}
+  .stage:not(.free) #actions button.big small{display:none}
+}
+#sheet{position:fixed;inset:0;z-index:20;background:var(--bg);overflow:auto;padding:0 10px 40px}
+#sheet>*{max-width:720px;margin-left:auto;margin-right:auto}
+.sheethead{position:sticky;top:0;z-index:2;display:flex;justify-content:space-between;align-items:center;background:var(--bg);padding:max(10px,env(safe-area-inset-top)) 0 10px}
+.sheethead .mini{font-size:15px;padding:6px 14px}
+.stage:not(.free) #quick label{flex-direction:row;align-items:center;gap:8px;white-space:nowrap}
+.stage:not(.free) #quick label input[type=range]{flex:1;min-width:90px}

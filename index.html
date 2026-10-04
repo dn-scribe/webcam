@@ -11,32 +11,37 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<main>
+<main class="stage">
   <section class="view">
     <video id="video" playsinline muted autoplay></video>
     <div class="hud">
       <span id="connDot" class="dot off"></span><span id="connText">offline</span>
       <span id="recBadge" class="badge" hidden>● REC <b id="recTime">0:00</b></span>
       <span id="camInfo" class="info"></span>
-      <button id="btnFull" class="mini" title="Full-screen view">⛶</button>
-    </div>
-    <div id="actions" class="widget">
-      <span class="grip" title="Drag to move">⠿</span>
-      <button id="btnSnap" class="big">📷<small>Snap</small></button>
-      <button id="btnRec" class="big">⏺<small>Record</small></button>
-      <button id="btnDl" class="big" disabled>⬇<small>Download</small></button>
-      <button id="btnFlip" class="big">🔄<small>Flip</small></button>
-      <button class="rot mini" title="Rotate toolbar">↻</button>
-    </div>
-    <div id="quick" class="widget quick" hidden>
-      <span class="grip" title="Drag to move">⠿</span>
-      <div id="quickBody"></div>
-      <button class="rot mini" title="Rotate panel">↻</button>
+      <button id="btnFull" class="mini" title="Full screen">⛶</button>
+      <button id="btnSheet" class="mini" title="Settings, connection, library">⚙</button>
     </div>
     <div id="toast" class="toast" hidden></div>
   </section>
 
-  <section class="panels">
+  <div id="quick" class="widget quick" hidden>
+    <span class="grip" title="Drag to move">⠿</span>
+    <div id="quickBody"></div>
+    <button class="rot mini" title="Rotate panel">↻</button>
+  </div>
+
+  <div id="actions" class="widget">
+    <span class="grip" title="Drag to move">⠿</span>
+    <button id="btnFlip" class="big">🔄<small>Flip</small></button>
+    <button id="btnSnap" class="big shutter">📷<small>Snap</small></button>
+    <button id="btnRec" class="big">⏺<small>Record</small></button>
+    <button id="btnDl" class="big" disabled>⬇<small>Download</small></button>
+    <button class="rot mini" title="Rotate toolbar">↻</button>
+  </div>
+</main>
+
+<section id="sheet" class="panels" hidden>
+  <div class="sheethead"><b>Settings</b><button id="btnSheetClose" class="mini">✕ Close</button></div>
     <details id="pConn" open>
       <summary>Connection to Python hub</summary>
       <div class="grid">
@@ -62,6 +67,7 @@
     <details id="pCam">
       <summary>Camera settings</summary>
       <div class="grid">
+        <label>Preview fit <select id="selFit"><option value="contain">Fit — whole frame (default)</option><option value="cover">Fill — crop edges to use the full screen</option></select></label>
         <label>Camera <select id="selDevice"></select></label>
         <label>Resolution
           <select id="selRes">
@@ -111,14 +117,14 @@
       <summary>App</summary>
       <p>Version <b id="verText"></b></p>
       <div class="actions">
-        <button id="btnResetLayout">Reset control layout</button>
+        <label>Controls <select id="selLayout"><option value="docked">Docked around the view (default)</option><option value="free">Floating (drag anywhere)</option></select></label>
+        <button id="btnResetLayout">Reset floating layout</button>
         <button id="btnInstall" hidden>Install app</button>
         <button id="btnUpdate">Update / clear cache</button>
       </div>
       <p class="hint">Once installed the app works with no internet. “Update / clear cache” deletes cached files and reloads the newest version (needs the page reachable once).</p>
     </details>
-  </section>
-</main>
+</section>
 <dialog id="preview">
   <div id="pvBody"></div>
   <p id="pvName" class="hint"></p>

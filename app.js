@@ -8,7 +8,7 @@ const video = $('#video');
 
 // ---------- settings ----------
 const DEFAULTS = {
-  facing: 'environment', deviceId: '', res: '1280x720', fps: 30, audio: false, bitrate: 'medium', codec: 'auto',
+  fit: 'contain', facing: 'environment', deviceId: '', res: '1280x720', fps: 30, audio: false, bitrate: 'medium', codec: 'auto',
   streamOn: false, streamFps: 10, streamWidth: 640, streamQuality: 0.6, snapQuality: 0.92,
   adv: {}, ui: {},
   hub: { host: '', port: 8765, token: '', tls: true, auto: true, name: 'cam-' + Math.random().toString(36).slice(2, 6), range: '', hubName: '' },
@@ -140,8 +140,11 @@ function buildUI() {
 // ---------- movable controls ----------
 const clamp = (v, lo, hi) => Math.min(Math.max(v, lo), hi);
 const WIDGETS = { bar: { el: '#actions', def: { x: 0.5, y: 0.97, vert: false } }, quick: { el: '#quick', def: { x: 0.02, y: 0.45, vert: false } } };
+const isFree = () => S.ui.layout === 'free';
 function place(name) {
-  const w = WIDGETS[name], el = $(w.el), host = el.offsetParent; if (!host || el.hidden) return;
+  const w = WIDGETS[name], el = $(w.el);
+  if (!isFree()) { el.style.left = el.style.top = ''; el.classList.remove('vert'); return; }   // docked: CSS grid positions it
+  const host = el.offsetParent; if (!host || el.hidden) return;
   const p = { ...w.def, ...(S.ui[name] || {}) };
   el.classList.toggle('vert', !!p.vert);
   const W = Math.max(0, host.clientWidth - el.offsetWidth), H = Math.max(0, host.clientHeight - el.offsetHeight);
@@ -166,15 +169,50 @@ function initWidgets() {
   }
   addEventListener('resize', placeAll);
   $('#btnFull').onclick = toggleFull;
-  $('#btnResetLayout').onclick = () => { S.ui = {}; save(); placeAll(); toast('Layout reset'); };
-  placeAll();
+  $('#btnResetLayout').onclick = () => { S.ui = { layout: S.ui.layout }; save(); placeAll(); toast('Floating layout reset'); };
+  $('#selLayout').onchange = (e) => setLayout(e.target.value);
+  setLayout(isFree() ? 'free' : 'docked');
+  initPinchZoom(); initSheet();
+}
+// Docked (default): the video takes all the space left and the controls sit around it. Floating: controls drag over the video.
+function setLayout(mode) {
+  S.ui.layout = mode; save();
+  const free = mode === 'free', stage = $('.stage');
+  stage.classList.toggle('free', free);
+  (free ? $('.view') : stage).append($('#quick'), $('#actions'));
+  $('#selLayout').value = mode; placeAll();
 }
 function toggleFull() {
-  const on = document.body.classList.toggle('full');
-  if (on) document.documentElement.requestFullscreen?.().catch(() => {}); else if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
-  setTimeout(placeAll, 50);
+  if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+  else document.documentElement.requestFullscreen?.().catch(() => toast('Full screen not available here'));
+}
+// pinch on the video = zoom (when the camera exposes zoom)
+function initPinchZoom() {
+  const view = $('.view'), pts = new Map(); let start = null, busy = false;
+  const dist = () => { const [a, b] = [...pts.values()]; return Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY); };
+  view.addEventListener('pointerdown', (e) => {
+    if (e.target.closest('.widget, button')) return;
+    pts.set(e.pointerId, e);
+    if (pts.size === 2 && caps.zoom) start = { d: dist(), z: S.adv.zoom ?? (track && track.getSettings().zoom) ?? caps.zoom.min };
+  });
+  view.addEventListener('pointermove', (e) => {
+    if (!pts.has(e.pointerId)) return; pts.set(e.pointerId, e);
+    if (pts.size !== 2 || !start || busy) return;
+    busy = true; applyAdv('zoom', clamp(start.z * dist() / start.d, caps.zoom.min, caps.zoom.max), true).finally(() => (busy = false));
+  });
+  const end = (e) => { pts.delete(e.pointerId); if (pts.size < 2 && start) { start = null; save(); buildUI(); sendState(); } };
+  view.addEventListener('pointerup', end); view.addEventListener('pointercancel', end);
+}
+// settings sheet (everything that is not an immediate control)
+let sheetAuto = false;
+function openSheet(auto) { $('#sheet').hidden = false; sheetAuto = !!auto; }
+function initSheet() {
+  $('#btnSheet').onclick = () => openSheet(false);
+  $('#btnSheetClose').onclick = () => ($('#sheet').hidden = true);
+  addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('#preview').open) $('#sheet').hidden = true; });
 }
 function syncUI() {
+  video.style.objectFit = S.fit === 'cover' ? 'cover' : 'contain'; $('#selFit').value = S.fit === 'cover' ? 'cover' : 'contain';
   $('#selRes').value = S.res; $('#selFps').value = String(S.fps); $('#selBitrate').value = S.bitrate; $('#selCodec').value = S.codec; $('#chkAudio').checked = S.audio;
   $('#chkStream').checked = S.streamOn; $('#stFps').value = S.streamFps; $('#stWidth').value = S.streamWidth;
   $('#stQual').value = S.streamQuality; $('#snQual').value = S.snapQuality;
@@ -578,7 +616,7 @@ async function onMessage(ev) {
   let m; try { m = JSON.parse(ev.data); } catch { return; }
   try {
     switch (m.t) {
-      case 'welcome': backoff = 1000; failures = 0; libSig = ''; setConn('on', (m.hub || 'hub') + ' · ' + S.hub.host + (m.name && m.name !== S.hub.name ? ' · as ' + m.name : '')); $('#connHint').textContent = ''; $('#pConn').open = false; sendState(); reportRec(); streamLoop(); notifyLib(); break;
+      case 'welcome': backoff = 1000; failures = 0; libSig = ''; setConn('on', (m.hub || 'hub') + ' · ' + S.hub.host + (m.name && m.name !== S.hub.name ? ' · as ' + m.name : '')); $('#connHint').textContent = ''; $('#pConn').open = false; if (sheetAuto) { $('#sheet').hidden = true; sheetAuto = false; } sendState(); reportRec(); streamLoop(); notifyLib(); break;
       case 'ping': sendJSON({ t: 'pong' }); break;
       case 'get_state': sendState(); break;
       case 'set': { const e = await applySettings(m.settings || {}); if (e) sendJSON({ t: 'error', msg: e }); break; }
@@ -671,6 +709,7 @@ $('#selBitrate').onchange = (e) => applySettings({ bitrate: e.target.value });
 $('#selCodec').onchange = (e) => applySettings({ codec: e.target.value });
 $('#btnFlip').onclick = () => applySettings({ facing: S.facing === 'user' ? 'environment' : 'user', deviceId: '' });
 $('#selDevice').onchange = (e) => applySettings({ deviceId: e.target.value });
+$('#selFit').onchange = (e) => { S.fit = e.target.value; save(); syncUI(); };
 $('#selRes').onchange = (e) => applySettings({ res: e.target.value });
 $('#selFps').onchange = (e) => applySettings({ fps: Number(e.target.value) });
 $('#chkAudio').onchange = (e) => applySettings({ audio: e.target.checked });
@@ -688,7 +727,7 @@ $('#btnInstall').onclick = async () => { if (deferredInstall) { deferredInstall.
   const fromHash = readHash();
   fillHub(); save(); syncUI(); recUI(); initWidgets(); loadRecs(); await initSW();
   try { await startCamera(); } catch {}
-  if (!fromHash && !S.hub.host) setTimeout(findHub, 1500);   // nothing saved yet: look for a hub on the LAN
+  if (!fromHash && !S.hub.host) { openSheet(true); setTimeout(findHub, 1500); }   // first run: show the connection panel   // nothing saved yet: look for a hub on the LAN
   if (fromHash || (S.hub.host && S.hub.auto && localStorage.getItem('webcam.wasConnected') === '1')) { $('#btnConnect').textContent = 'Disconnect'; connect(); }
   window.webcam = { S, applySettings, snap, connect, disconnect, findHub, scanLan, probeHost }; // debugging / tests
 })();

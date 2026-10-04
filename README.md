@@ -38,7 +38,9 @@ Without a CA the phone can still connect to a known address (type it, or use the
 
 ## The phone app
 
-* **Controls:** Snap, Record/Stop, Download last clip, Flip camera — a draggable, rotatable toolbar plus a quick panel (zoom / torch / exposure / focus), and a ⛶ full-screen view. Positions are remembered (*App → Reset control layout*).
+* **Camera screen (default):** the live view takes all the space that is left and the immediate controls are docked around it — status and ⚙ along the top; **Flip · Snap · Record · Download** in a row below the view (a column on the right in landscape); a one-line strip with zoom / torch / exposure / focus next to them. **Pinch the view to zoom.** ⛶ toggles browser full screen. Everything else (connection, camera settings, library, app) is in the ⚙ settings sheet, which opens by itself on first run.
+* **Floating layout (optional):** *⚙ → App → Controls → Floating* lets you drag the toolbar and quick panel anywhere over the video and rotate them; positions are remembered (*Reset floating layout*).
+* **Preview fit:** *Fit* shows the whole frame; *Fill* crops the edges to use the full screen (preview only — snapshots and recordings are unaffected).
 * **Camera settings:** camera device, resolution, frame rate, microphone, plus every control the device reports (zoom, torch, exposure, focus, white balance, ISO, brightness, contrast, saturation, sharpness).
 * **Recording:** quality 1–10 Mbps and codec (H.264 mp4 or smaller VP9 webm). Chunks are written to the phone's IndexedDB while recording (crash-safe, not held in RAM; interrupted recordings are recovered on the next launch).
 * **Library:** snapshots and clips are stored on the phone and managed together: thumbnails, filter (All / Clips / Photos), tap to preview, rename, download, share, delete, **Select** for bulk actions, and **→ PC** to push files to the hub.
