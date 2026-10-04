@@ -13,7 +13,7 @@
 <body>
 <main class="stage">
   <section class="view">
-    <video id="video" playsinline muted autoplay></video>
+    <div id="frame"><video id="video" playsinline muted autoplay></video></div>
     <div class="hud">
       <span id="connDot" class="dot off"></span><span id="connText">offline</span>
       <span id="recBadge" class="badge" hidden>● REC <b id="recTime">0:00</b></span>
@@ -67,12 +67,13 @@
     <details id="pCam">
       <summary>Camera settings</summary>
       <div class="grid">
-        <label>Preview fit <select id="selFit"><option value="contain">Fit — whole frame (default)</option><option value="cover">Fill — crop edges to use the full screen</option></select></label>
         <label>Camera <select id="selDevice"></select></label>
         <label>Resolution
           <select id="selRes">
             <option>640x480</option><option>1280x720</option><option>1920x1080</option><option>3840x2160</option><option value="max">Maximum available</option>
           </select></label>
+        <label>Aspect ratio (preview, photos, clips and stream all match)
+          <select id="selAspect"><option value="native">Camera default</option><option value="16:9">16:9</option><option value="4:3">4:3</option><option value="3:2">3:2</option><option value="1:1">1:1 square</option><option value="21:9">21:9 wide</option></select></label>
         <label>Photo size <select id="selPhoto"><option value="max">Maximum (full sensor)</option><option value="12mp">≈ 12 MP</option><option value="8mp">≈ 8 MP</option><option value="2mp">≈ 2 MP</option><option value="video">Video frame size</option></select></label>
         <label>Frame rate <select id="selFps"><option>15</option><option>24</option><option>30</option><option>60</option></select></label>
         <label class="row"><input id="chkAudio" type="checkbox"> Record microphone</label>

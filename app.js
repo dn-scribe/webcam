@@ -8,12 +8,12 @@ const video = $('#video');
 
 // ---------- settings ----------
 const DEFAULTS = {
-  photoRes: 'max', fit: 'contain', facing: 'environment', deviceId: '', res: '1280x720', fps: 30, audio: false, bitrate: 'medium', codec: 'auto',
+  photoRes: 'max', aspect: 'native', facing: 'environment', deviceId: '', res: '1280x720', fps: 30, audio: false, bitrate: 'medium', codec: 'auto',
   streamOn: false, streamFps: 10, streamWidth: 640, streamQuality: 0.6, snapQuality: 0.92,
   adv: {}, ui: {},
   hub: { host: '', port: 8765, token: '', tls: true, auto: true, name: 'cam-' + Math.random().toString(36).slice(2, 6), range: '', hubName: '' },
 };
-const CAMERA_KEYS = ['facing', 'deviceId', 'res', 'fps', 'audio'];
+const CAMERA_KEYS = ['facing', 'deviceId', 'res', 'fps', 'audio', 'aspect'];
 const STREAM_KEYS = ['streamFps', 'streamWidth', 'streamQuality', 'snapQuality'];
 const REC_KEYS = ['bitrate', 'codec', 'photoRes'];
 let S = load();
@@ -42,9 +42,9 @@ let stream = null, track = null, caps = {}, devices = [];
 // Ask for the resolution strictly first (Android treats "ideal" as a hint and often hands back 640x480), in both
 // orientations, and only then fall back to the soft request.
 async function openStream(w, h) {
-  const base = { frameRate: { ideal: Number(S.fps) } };
+  const base = { frameRate: { ideal: Number(S.fps) } }, ratio = ASPECTS[S.aspect];
   if (S.deviceId) base.deviceId = { exact: S.deviceId }; else base.facingMode = { ideal: S.facing };
-  const mk = (W, H, strict) => ({ ...base, width: strict ? { exact: W } : { ideal: W }, height: strict ? { exact: H } : { ideal: H } });
+  const mk = (W, H, strict) => ({ ...base, width: strict ? { exact: W } : { ideal: W }, height: strict ? { exact: H } : { ideal: H }, ...(!strict && ratio ? { aspectRatio: { ideal: W > H ? ratio : 1 / ratio } } : {}) });
   const attempts = S.res === 'max' ? [[w, h, false]] : [[w, h, true], [h, w, true], [w, h, false]];
   let last;
   for (const [W, H, strict] of attempts) {
@@ -55,7 +55,8 @@ async function openStream(w, h) {
 }
 async function startCamera() {
   stopCamera();
-  const [w, h] = S.res === 'max' ? [4096, 2160] : S.res.split('x').map(Number);
+  let [w, h] = S.res === 'max' ? [4096, 2160] : S.res.split('x').map(Number);
+  if (ASPECTS[S.aspect]) { const long = Math.max(w, h); w = long; h = Math.round(long / ASPECTS[S.aspect] / 2) * 2; }   // resolution = long edge, aspect decides the rest
   try {
     stream = await openStream(w, h);
   } catch (e) {
@@ -65,6 +66,7 @@ async function startCamera() {
   track = stream.getVideoTracks()[0];
   video.srcObject = stream;
   await video.play().catch(() => {});
+  if (video.videoWidth === 0) await new Promise((r) => video.addEventListener('loadedmetadata', r, { once: true }));
   caps = track.getCapabilities ? track.getCapabilities() : {};
   devices = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === 'videoinput');
   for (const [k, val] of Object.entries(S.adv)) await applyAdv(k, val, true);
@@ -82,9 +84,31 @@ function stopCamera() {
   if (stream) stream.getTracks().forEach((t) => t.stop());
   stream = track = null;
 }
+// ---------- aspect ratio: preview, photos, clips and the live stream all share ONE output frame (WYSIWYG) ----------
+const ASPECTS = { '16:9': 16 / 9, '4:3': 4 / 3, '3:2': 3 / 2, '1:1': 1, '21:9': 21 / 9 };
+const srcAR = () => (video.videoWidth ? video.videoWidth / video.videoHeight : 16 / 9);
+// target ratio for a source of the given orientation (portrait sources get the portrait version of the ratio)
+function arFor(w, h) { const r = ASPECTS[S.aspect]; const portrait = h > w; if (r) return portrait ? 1 / r : r; const v = srcAR(); return (v < 1) === portrait ? v : 1 / v; }
+const outAR = () => arFor(video.videoWidth || 16, video.videoHeight || 9);
+function cropRect(w, h, ar) {      // largest centred rectangle of aspect `ar` inside w×h
+  const cur = w / h;
+  if (Math.abs(cur - ar) / ar < 0.01) return { sx: 0, sy: 0, sw: w, sh: h };
+  if (cur > ar) { const sw = Math.round(h * ar); return { sx: Math.round((w - sw) / 2), sy: 0, sw, sh: h }; }
+  const sh = Math.round(w / ar); return { sx: 0, sy: Math.round((h - sh) / 2), sw: w, sh };
+}
+const needsCrop = () => { const r = cropRect(video.videoWidth || 1, video.videoHeight || 1, outAR()); return r.sw !== video.videoWidth || r.sh !== video.videoHeight; };
+function layoutFrame() {          // the preview box has exactly the output aspect: what you see is what you get
+  const view = $('.view'), fr = $('#frame'), vw = view.clientWidth, vh = view.clientHeight, ar = outAR(); if (!vw || !vh) return;
+  let w = vw, h = w / ar; if (h > vh) { h = vh; w = h * ar; }
+  fr.style.width = Math.round(w) + 'px'; fr.style.height = Math.round(h) + 'px';
+  video.style.objectFit = needsCrop() ? 'cover' : 'contain';
+}
 function updateCamInfo() {
-  const st = track ? track.getSettings() : {};
-  $('#camInfo').textContent = st.width ? `${st.width}×${st.height} @${Math.round(st.frameRate || 0)}` : '';
+  const st = track ? track.getSettings() : {}, vw = video.videoWidth || st.width;
+  if (!vw) { $('#camInfo').textContent = ''; return; }
+  const vh = video.videoHeight || st.height, r = cropRect(vw, vh, outAR());
+  $('#camInfo').textContent = `${r.sw}×${r.sh}${r.sw !== vw || r.sh !== vh ? ` (cam ${vw}×${vh})` : ''} @${Math.round(st.frameRate || 0)}`;
+  layoutFrame();
 }
 async function applyAdv(key, value, quiet) {
   if (!track) return;
@@ -190,6 +214,7 @@ function initWidgets() {
   $('#selLayout').onchange = (e) => setLayout(e.target.value);
   setLayout(isFree() ? 'free' : 'docked');
   initPinchZoom(); initSheet();
+  new ResizeObserver(layoutFrame).observe($('.view')); video.addEventListener('loadedmetadata', updateCamInfo); video.addEventListener('resize', updateCamInfo);
 }
 // Docked (default): the video takes all the space left and the controls sit around it. Floating: controls drag over the video.
 function setLayout(mode) {
@@ -229,7 +254,7 @@ function initSheet() {
   addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('#preview').open) $('#sheet').hidden = true; });
 }
 function syncUI() {
-  video.style.objectFit = S.fit === 'cover' ? 'cover' : 'contain'; $('#selFit').value = S.fit === 'cover' ? 'cover' : 'contain';
+  $('#selAspect').value = S.aspect;
   $('#selRes').value = S.res; $('#selFps').value = String(S.fps); $('#selBitrate').value = S.bitrate; $('#selPhoto').value = S.photoRes; $('#selCodec').value = S.codec; $('#chkAudio').checked = S.audio;
   $('#chkStream').checked = S.streamOn; $('#stFps').value = S.streamFps; $('#stWidth').value = S.streamWidth;
   $('#stQual').value = S.streamQuality; $('#snQual').value = S.snapQuality;
@@ -237,13 +262,22 @@ function syncUI() {
 
 // ---------- frames / snapshots ----------
 const scratch = document.createElement('canvas');
-function grab(maxW, quality) {
+function grab(maxW, quality) {     // centre-cropped to the output aspect, optionally scaled down to maxW
   const vw = video.videoWidth, vh = video.videoHeight;
   if (!vw) return Promise.reject(new Error('no video'));
-  const sc = maxW && vw > maxW ? maxW / vw : 1;
-  scratch.width = Math.round(vw * sc); scratch.height = Math.round(vh * sc);
-  scratch.getContext('2d').drawImage(video, 0, 0, scratch.width, scratch.height);
+  const { sx, sy, sw, sh } = cropRect(vw, vh, outAR()), sc = maxW && sw > maxW ? maxW / sw : 1;
+  scratch.width = Math.round(sw * sc); scratch.height = Math.round(sh * sc);
+  scratch.getContext('2d').drawImage(video, sx, sy, sw, sh, 0, 0, scratch.width, scratch.height);
   return new Promise((res, rej) => scratch.toBlob((b) => (b ? res({ blob: b, w: scratch.width, h: scratch.height }) : rej(new Error('encode failed'))), 'image/jpeg', quality));
+}
+// crop a still (e.g. the 4:3 full-sensor photo) to the same frame the preview shows
+async function framePhoto(blob) {
+  const bmp = await createImageBitmap(blob), r = cropRect(bmp.width, bmp.height, arFor(bmp.width, bmp.height));
+  if (r.sw === bmp.width && r.sh === bmp.height) { const o = { blob, w: bmp.width, h: bmp.height }; bmp.close(); return o; }
+  const c = document.createElement('canvas'); c.width = r.sw; c.height = r.sh;
+  c.getContext('2d').drawImage(bmp, r.sx, r.sy, r.sw, r.sh, 0, 0, r.sw, r.sh); bmp.close();
+  const out = await new Promise((res) => c.toBlob(res, 'image/jpeg', Math.max(S.snapQuality, 0.9)));
+  return { blob: out, w: r.sw, h: r.sh };
 }
 let snaps = [], snapSeq = 0;   // persisted photos, newest first
 // Full-sensor photo through ImageCapture.takePhoto() (e.g. 12 MP), not a crop of the video frame (often <= 1080p).
@@ -258,8 +292,7 @@ async function takeStill() {
       const snapTo = (v, r) => Math.min(r.max, Math.max(r.min, r.step > 1 ? Math.round(v / r.step) * r.step : Math.round(v)));
       opt.imageWidth = snapTo(maxW * k, pc.imageWidth); opt.imageHeight = snapTo(maxH * k, pc.imageHeight);
     }
-    const blob = await ic.takePhoto(opt), bmp = await createImageBitmap(blob), out = { blob, w: bmp.width, h: bmp.height }; bmp.close();
-    return out;
+    return await framePhoto(await ic.takePhoto(opt));
   } catch (e) { console.warn('takePhoto failed, using video frame', e); return null; }
 }
 async function snap(quality, id) {
@@ -325,20 +358,30 @@ function pickMime() {
   const order = S.codec === 'vp9' ? [...vp9, ...h264] : S.codec === 'h264' ? [...h264, ...vp9] : [...h264, ...vp9];
   return order.find((m) => window.MediaRecorder && MediaRecorder.isTypeSupported(m)) || '';
 }
+let cropStop = null;
+function croppedStream() {        // canvas pipeline so clips match the cropped preview exactly
+  const vw = video.videoWidth, vh = video.videoHeight, r = cropRect(vw, vh, outAR());
+  const c = document.createElement('canvas'); c.width = r.sw & ~1; c.height = r.sh & ~1;
+  const g = c.getContext('2d'); let on = true;
+  const draw = () => { if (!on) return; g.drawImage(video, r.sx, r.sy, r.sw, r.sh, 0, 0, c.width, c.height); if (video.requestVideoFrameCallback) video.requestVideoFrameCallback(draw); else setTimeout(draw, 1000 / (Number(S.fps) || 30)); };
+  draw();
+  const out = c.captureStream(Number(S.fps) || 30); stream.getAudioTracks().forEach((t) => out.addTrack(t));
+  cropStop = () => { on = false; }; return out;
+}
 function startRec() {
   if (recorder || !stream) return 'not ready';
   if (!window.MediaRecorder) return 'MediaRecorder unsupported';
   const mime = pickMime();
   recSize = 0; recWrites = []; recMem = []; recId = Math.floor(Date.now() / 1000);
   const id = recId; let idx = 0;
-  recorder = new MediaRecorder(stream, { ...(mime && { mimeType: mime }), videoBitsPerSecond: BITRATES[S.bitrate] || BITRATES.medium, audioBitsPerSecond: 96000 });
+  recorder = new MediaRecorder(needsCrop() ? croppedStream() : stream, { ...(mime && { mimeType: mime }), videoBitsPerSecond: BITRATES[S.bitrate] || BITRATES.medium, audioBitsPerSecond: 96000 });
   recorder.ondataavailable = (e) => {
     if (!e.data.size) return;
     recSize += e.data.size; const i = idx++;
     recWrites.push(idb.put('chunks', { rec: id, idx: i, blob: e.data }).catch(() => recMem.push({ rec: id, idx: i, blob: e.data })));
   };
   recorder.onstop = async () => {
-    clearInterval(recTick);
+    clearInterval(recTick); if (cropStop) { cropStop(); cropStop = null; }
     const type = recorder.mimeType || mime || 'video/webm', started = recStart;
     recorder = null; recUI();
     await Promise.all(recWrites);
@@ -361,7 +404,7 @@ function recUI() {
   $('#recBadge').hidden = !on;
   const s = Math.floor((Date.now() - recStart) / 1000); $('#recTime').textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
   $('#btnDl').disabled = !lastRec || on;
-  ['selDevice', 'selRes', 'selFps', 'chkAudio', 'btnFlip', 'selBitrate', 'selCodec'].forEach((i) => ($('#' + i).disabled = on));
+  ['selDevice', 'selRes', 'selAspect', 'selFps', 'chkAudio', 'btnFlip', 'selBitrate', 'selCodec'].forEach((i) => ($('#' + i).disabled = on));
 }
 function reportRec() { sendJSON({ t: 'rec_status', ...recStatus() }); }
 const recStatus = () => ({ state: recorder ? 'recording' : 'idle', elapsed: recorder ? (Date.now() - recStart) / 1000 : 0, size: recSize, last: lastRec && { id: lastRec.id, size: lastRec.size, name: lastRec.name } });
@@ -679,7 +722,7 @@ function sendState() {
   const st = track ? track.getSettings() : {};
   sendJSON({
     t: 'state', version: self.APP_VERSION, build: self.APP_BUILD,
-    settings: { facing: S.facing, deviceId: S.deviceId, res: S.res, fps: S.fps, audio: S.audio, bitrate: S.bitrate, codec: S.codec, photoRes: S.photoRes, streamFps: S.streamFps, streamWidth: S.streamWidth, streamQuality: S.streamQuality, snapQuality: S.snapQuality, ...S.adv },
+    settings: { facing: S.facing, deviceId: S.deviceId, res: S.res, aspect: S.aspect, fps: S.fps, audio: S.audio, bitrate: S.bitrate, codec: S.codec, photoRes: S.photoRes, streamFps: S.streamFps, streamWidth: S.streamWidth, streamQuality: S.streamQuality, snapQuality: S.snapQuality, ...S.adv },
     caps, devices: devices.map((d) => ({ id: d.deviceId, label: d.label })),
     video: { w: st.width, h: st.height, fps: st.frameRate }, recording: recStatus(), streaming: S.streamOn,
   });
@@ -742,7 +785,7 @@ $('#selBitrate').onchange = (e) => applySettings({ bitrate: e.target.value });
 $('#selCodec').onchange = (e) => applySettings({ codec: e.target.value });
 $('#btnFlip').onclick = () => applySettings({ facing: S.facing === 'user' ? 'environment' : 'user', deviceId: '' });
 $('#selDevice').onchange = (e) => applySettings({ deviceId: e.target.value });
-$('#selFit').onchange = (e) => { S.fit = e.target.value; save(); syncUI(); };
+$('#selAspect').onchange = (e) => applySettings({ aspect: e.target.value });
 $('#selPhoto').onchange = (e) => applySettings({ photoRes: e.target.value });
 $('#selRes').onchange = (e) => applySettings({ res: e.target.value });
 $('#selFps').onchange = (e) => applySettings({ fps: Number(e.target.value) });
@@ -763,6 +806,6 @@ $('#btnInstall').onclick = async () => { if (deferredInstall) { deferredInstall.
   try { await startCamera(); } catch {}
   if (!fromHash && !S.hub.host) { openSheet(true); setTimeout(findHub, 1500); }   // first run: show the connection panel   // nothing saved yet: look for a hub on the LAN
   if (fromHash || (S.hub.host && S.hub.auto && localStorage.getItem('webcam.wasConnected') === '1')) { $('#btnConnect').textContent = 'Disconnect'; connect(); }
-  window.webcam = { S, applySettings, snap, connect, disconnect, findHub, scanLan, probeHost }; // debugging / tests
+  window.webcam = { layoutFrame, cropRect, outAR, S, applySettings, snap, connect, disconnect, findHub, scanLan, probeHost }; // debugging / tests
 })();
 })();

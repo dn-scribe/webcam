@@ -92,3 +92,8 @@ main.stage{max-width:none;margin:0;padding:0;display:grid;height:100dvh;backgrou
 .sheethead .mini{font-size:15px;padding:6px 14px}
 .stage:not(.free) #quick label{flex-direction:row;align-items:center;gap:8px;white-space:nowrap}
 .stage:not(.free) #quick label input[type=range]{flex:1;min-width:90px}
+
+/* preview = exactly the output frame (size set in JS from the output aspect) */
+.view{display:flex;align-items:center;justify-content:center}
+#frame{position:relative;overflow:hidden;background:#000;flex:none;box-shadow:0 0 0 1px #fff2}
+#frame video{width:100%;height:100%;display:block}

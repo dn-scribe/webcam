@@ -42,7 +42,7 @@ Everything else is optional: the token is off by default, and no pairing step is
 | Area | Feature |
 |---|---|
 | Camera | front/back/device, resolution, fps, microphone; every capability the browser reports for the track, rendered dynamically (zoom, torch, exposure mode/compensation/time, focus mode/distance, white balance/temperature, ISO, brightness, contrast, saturation, sharpness) |
-| UI | camera screen: video maximal, controls docked around it (CSS grid: top bar, view, quick strip, action row; action column on the right in landscape); settings sheet; pinch-to-zoom; optional floating draggable layout; preview Fit/Fill |
+| UI | camera screen: video maximal, controls docked around it (CSS grid: top bar, view, quick strip, action row; action column on the right in landscape); settings sheet; pinch-to-zoom; optional floating draggable layout; WYSIWYG output frame (`aspect`: native\|16:9\|4:3\|3:2\|1:1\|21:9) |
 | Snapshots | full-sensor JPEG through `ImageCapture.takePhoto()` (`photoRes`: `max`\|`12mp`\|`8mp`\|`2mp`\|`video`), falling back to the video frame at JPEG quality `snapQuality`; saved to the phone library; hub may request one |
 | Recording | MediaRecorder (H.264 mp4 if supported, else VP9/VP8 webm); bitrate 1/2.5/5/10 Mbps; chunks persisted to IndexedDB, crash recovery |
 | Library | photos + clips in one list: thumbnails, preview, rename, share, download, delete, multi-select, push to hub |
@@ -138,6 +138,7 @@ Status codes: 401 token, 403 not LAN, 404 no match/ambiguous camera/item, 502 er
 * **Preview stream:** a canvas grabs the video at `streamFps`, scaled to `streamWidth`, JPEG `streamQuality`; skipped while the socket's `bufferedAmount` > 512 KiB.
 * **Reconnect:** exponential back-off 1 → 10 s; after 3 failed attempts with auto-reconnect on, it scans for the hub again (the IP may have changed).
 * **Camera resolution:** requested strictly (`exact` width/height, then the swapped orientation) and only then as a soft `ideal`, because Android treats `ideal` as a hint and often returns 640×480; a toast reports a delivered size more than 15% below the request.
+* **Output frame (WYSIWYG):** one aspect (`aspect`, or the camera's own) defines the preview box, photos, clips and preview-stream frames. Resolution is the long edge; the camera is asked for the exact mode, else the output is centre-cropped in software: preview via `object-fit: cover` in a box of that aspect, stills via canvas crop (also of `takePhoto` output), clips via a `canvas.captureStream()` pipeline with the original audio track. `aspect` is a camera-level setting (restarts the camera, refused while recording).
 * **Wake lock** requested while the camera runs.
 
 ## 5. Offline and versioning
