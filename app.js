@@ -193,7 +193,7 @@ function grab(maxW, quality) {
 let snaps = [], snapSeq = 0;   // persisted photos, newest first
 async function snap(quality, id) {
   const { blob, w, h } = await grab(0, quality ?? S.snapQuality);
-  const ts = Date.now(), item = { id: ts * 100 + (snapSeq++ % 100), kind: 'photo', name: `snap-${stamp()}.jpg`, type: 'image/jpeg', size: blob.size, ts, w, h, blob };
+  const ts = Date.now(), item = { id: ts * 100 + (snapSeq++ % 100), kind: 'photo', name: `snap-${stamp()}-${String(ts % 1000).padStart(3, '0')}.jpg`, type: 'image/jpeg', size: blob.size, ts, w, h, blob };
   snaps.unshift(item); idb.put('snaps', item).catch(() => {}); renderLib(); storageInfo(); flash();
   if (id != null && wsOpen()) {
     sendJSON({ t: 'snap_meta', id, w, h, size: blob.size, mime: 'image/jpeg' });
@@ -295,19 +295,24 @@ function recUI() {
 function reportRec() { sendJSON({ t: 'rec_status', ...recStatus() }); }
 const recStatus = () => ({ state: recorder ? 'recording' : 'idle', elapsed: recorder ? (Date.now() - recStart) / 1000 : 0, size: recSize, last: lastRec && { id: lastRec.id, size: lastRec.size, name: lastRec.name } });
 const blobOf = (meta) => (meta.mem ? Promise.resolve(meta.mem) : recBlob(meta));
-async function sendRecording(id) {
-  const meta = recs.find((r) => r.id === id) || lastRec;
-  if (!meta) throw new Error('no recording');
-  const blob = await blobOf(meta), CH = 256 * 1024; let idx = 0;
+async function sendChunks(blob, kind, id) {   // binary: [kind][id u32][index u32][bytes]
+  const CH = 256 * 1024; let idx = 0;
   for (let off = 0; off < blob.size; off += CH, idx++) {
     while (wsOpen() && ws.bufferedAmount > 2 * CH) await new Promise((r) => setTimeout(r, 20));
     if (!wsOpen()) throw new Error('disconnected');
-    const head = new Uint8Array(9); head[0] = 3;
-    const dv = new DataView(head.buffer); dv.setUint32(1, meta.id); dv.setUint32(5, idx);
+    const head = new Uint8Array(9); head[0] = kind;
+    const dv = new DataView(head.buffer); dv.setUint32(1, id); dv.setUint32(5, idx);
     ws.send(new Blob([head, blob.slice(off, off + CH)]));
   }
-  sendJSON({ t: 'rec_file_end', id: meta.id, size: blob.size, mime: meta.type, chunks: idx, name: meta.name });
+  return idx;
 }
+async function sendRecording(id) {
+  const meta = recs.find((r) => r.id === id) || lastRec;
+  if (!meta) throw new Error('no recording');
+  const blob = await blobOf(meta), chunks = await sendChunks(blob, 3, meta.id);
+  sendJSON({ t: 'rec_file_end', id: meta.id, size: blob.size, mime: meta.type, chunks, name: meta.name });
+}
+
 // ---------- library (videos + photos) ----------
 const itemKey = (i) => `${i.kind}:${i.id}`;
 const allItems = () => [...recs, ...snaps].sort((a, b) => b.ts - a.ts);
@@ -352,7 +357,7 @@ function renderLib() {
   document.querySelectorAll('#libFilter button').forEach((b) => b.classList.toggle('on', b.dataset.f === libFilter));
   $('#libSelect').textContent = selMode ? 'Done' : 'Select';
   $('#libActions').hidden = !selMode; $('#libSelN').textContent = `${sel.size} selected`;
-  ['#libDl', '#libShare', '#libDel'].forEach((b) => ($(b).disabled = !sel.size));
+  ['#libDl', '#libShare', '#libDel', '#libPush'].forEach((b) => ($(b).disabled = !sel.size));
   const grid = $('#libGrid'); grid.innerHTML = '';
   if (!shown.length) grid.innerHTML = '<p class="hint">Nothing here yet — take a snapshot or record a clip.</p>';
   for (const i of shown) {
@@ -365,6 +370,7 @@ function renderLib() {
     card.onclick = () => { if (selMode) { sel.has(itemKey(i)) ? sel.delete(itemKey(i)) : sel.add(itemKey(i)); renderLib(); } else openPreview(i); };
     grid.append(card);
   }
+  notifyLib();
 }
 let pvUrl = null;
 async function openPreview(i) {
@@ -373,7 +379,7 @@ async function openPreview(i) {
   const el = document.createElement(i.kind === 'photo' ? 'img' : 'video'); el.src = pvUrl;
   if (i.kind === 'video') Object.assign(el, { controls: true, autoplay: false, playsInline: true });
   body.append(el); $('#pvName').textContent = `${i.name} · ${fmtSize(i.size)}`;
-  $('#pvDl').onclick = guard(() => downloadItems([i])); $('#pvShare').onclick = guard(() => shareItems([i]));
+  $('#pvDl').onclick = guard(() => downloadItems([i])); $('#pvShare').onclick = guard(() => shareItems([i])); $('#pvPush').onclick = guard(() => pushToHub([i]));
   $('#pvRename').onclick = guard(async () => { await renameItem(i); $('#pvName').textContent = `${i.name} · ${fmtSize(i.size)}`; });
   $('#pvDel').onclick = guard(async () => { await deleteItems([i]); if (!allItems().includes(i)) dlg.close(); });
   dlg.showModal();
@@ -387,6 +393,39 @@ const selected = () => allItems().filter((i) => sel.has(itemKey(i)));
 $('#libDl').onclick = guard(() => downloadItems(selected()));
 $('#libShare').onclick = guard(() => shareItems(selected()));
 $('#libDel').onclick = guard(() => deleteItems(selected()));
+$('#libPush').onclick = guard(() => pushToHub(selected()));
+
+// ---- library <-> hub (list / download / delete / push) ----
+const libMeta = (i) => ({ kind: i.kind, id: i.id, name: i.name, type: i.type, size: i.size, ts: i.ts, secs: i.secs, w: i.w, h: i.h });
+let libSig = '';
+function notifyLib(force) {
+  if (!wsOpen()) return;
+  const items = allItems(), sig = items.map((i) => itemKey(i) + i.name).join('|');
+  if (!force && sig === libSig) return; libSig = sig;
+  sendJSON({ t: 'lib', items: items.map(libMeta) });
+}
+const thumbCache = new Map();
+async function thumbData(i) {
+  const k = itemKey(i); if (thumbCache.has(k)) return thumbCache.get(k);
+  let blob = i.thumb || null;
+  if (i.kind === 'photo') {
+    const bmp = await createImageBitmap(i.blob, { resizeWidth: 240 }), c = document.createElement('canvas');
+    c.width = bmp.width; c.height = bmp.height; c.getContext('2d').drawImage(bmp, 0, 0); bmp.close();
+    blob = await new Promise((r) => c.toBlob(r, 'image/jpeg', 0.6));
+  }
+  const url = blob ? await new Promise((r) => { const f = new FileReader(); f.onload = () => r(f.result); f.readAsDataURL(blob); }) : null;
+  thumbCache.set(k, url); return url;
+}
+const findItem = (kind, id) => allItems().find((i) => i.kind === kind && i.id === id);
+async function libFile(req, i, push) {
+  const blob = await blobOfItem(i), chunks = await sendChunks(blob, 4, req);
+  sendJSON({ t: 'lib_file_end', req, push: !!push, kind: i.kind, id: i.id, name: i.name, mime: i.type, size: blob.size, chunks });
+}
+async function pushToHub(items) {
+  if (!wsOpen()) throw new Error('not connected to a hub');
+  for (const i of items) await libFile(Math.floor(Math.random() * 2 ** 31), i, true);
+  toast(`Sent ${items.length} file${items.length > 1 ? 's' : ''} to the PC`);
+}
 
 async function storageInfo() {
   try {
@@ -476,7 +515,7 @@ async function onMessage(ev) {
   let m; try { m = JSON.parse(ev.data); } catch { return; }
   try {
     switch (m.t) {
-      case 'welcome': backoff = 1000; failures = 0; setConn('on', 'hub ' + S.hub.host); $('#connHint').textContent = ''; $('#pConn').open = false; sendState(); reportRec(); streamLoop(); break;
+      case 'welcome': backoff = 1000; failures = 0; libSig = ''; setConn('on', 'hub ' + S.hub.host); $('#connHint').textContent = ''; $('#pConn').open = false; sendState(); reportRec(); streamLoop(); notifyLib(); break;
       case 'ping': sendJSON({ t: 'pong' }); break;
       case 'get_state': sendState(); break;
       case 'set': { const e = await applySettings(m.settings || {}); if (e) sendJSON({ t: 'error', msg: e }); break; }
@@ -485,6 +524,10 @@ async function onMessage(ev) {
         await applySettings(p); break;
       }
       case 'snap': await snap(m.quality, m.id); break;
+      case 'lib_list': sendJSON({ t: 'lib', req: m.req, items: allItems().map(libMeta) }); break;
+      case 'lib_thumb': { const i = findItem(m.kind, m.id); if (i) sendJSON({ t: 'lib_thumb', kind: m.kind, id: m.id, data: await thumbData(i) }); break; }
+      case 'lib_get': { const i = findItem(m.kind, m.id); if (!i) { sendJSON({ t: 'error', req: m.req, msg: 'not found' }); break; } await libFile(m.req, i, false); break; }
+      case 'lib_delete': { const found = (m.items || []).map((x) => findItem(x.kind, x.id)).filter(Boolean); await deleteItems(found, false); notifyLib(true); break; }
       case 'rec': {
         let e = null;
         if (m.action === 'start') e = startRec();

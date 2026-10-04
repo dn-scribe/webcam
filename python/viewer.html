@@ -30,11 +30,28 @@ label{display:flex;flex-direction:column;gap:3px;font-size:12px;color:var(--dim)
 label.chk{flex-direction:row;align-items:center;gap:8px;color:var(--fg);font-size:14px}
 input,select{font:inherit;color:var(--fg);background:#0e1216;border:1px solid var(--line);border-radius:6px;padding:6px;min-width:0}
 input[type=range]{padding:0}
+.tabs{display:flex;gap:4px}.tabs button{flex:none;padding:5px 14px}.tabs button.on{background:var(--acc);border-color:var(--acc);color:#001}
+#libview{grid-area:view;display:flex;flex-direction:column;min-height:0;overflow:hidden}
+.libtools{display:flex;gap:8px;align-items:center;padding:10px 14px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+.libtools button{flex:none;padding:6px 12px}.libtools button.on{background:var(--acc);border-color:var(--acc);color:#001}.libtools .sp{flex:1}
+#grid{flex:1;overflow:auto;padding:14px;display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;align-content:start}
+.card{position:relative;background:var(--card);border:2px solid transparent;border-radius:10px;overflow:hidden;cursor:pointer}
+.card.sel{border-color:var(--acc)}
+.card img,.card .ph{width:100%;aspect-ratio:4/3;object-fit:cover;display:flex;align-items:center;justify-content:center;font-size:30px;background:#1b222b}
+.card .tag{position:absolute;left:6px;top:6px;background:#000b;font-size:11px;padding:1px 7px;border-radius:8px}
+.card input{position:absolute;right:6px;top:6px;width:20px;height:20px}
+.card .cap{font-size:11px;color:var(--dim);padding:5px 7px}.card .cap b{color:var(--fg);font-weight:500;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.card a.dl{position:absolute;right:6px;bottom:30px;background:#000b;border-radius:6px;padding:2px 7px;color:#fff;text-decoration:none}
+dialog{background:var(--card);color:var(--fg);border:1px solid var(--line);border-radius:12px;padding:12px;width:min(92vw,900px)}
+dialog::backdrop{background:#000d}
+dialog img,dialog video{width:100%;max-height:75vh;object-fit:contain;background:#000;border-radius:8px;display:block}
+dialog .row{margin:10px 0 0}dialog a.btn{flex:1;text-align:center;text-decoration:none;color:var(--fg);background:var(--card);border:1px solid var(--line);border-radius:8px;padding:9px 6px}
 </style>
 </head>
 <body>
 <header>
   <b>📷 Webcam viewer</b>
+  <span class="tabs"><button id="tLive" class="on">Live</button><button id="tLib">Library</button></span>
   <span><span id="dot" class="dot"></span> <span id="status">connecting…</span></span>
   <span id="info" class="dim"></span>
 </header>
@@ -45,6 +62,17 @@ input[type=range]{padding:0}
   <div id="rec" hidden>● REC <span id="rt">0:00</span></div>
   <div id="toast" hidden></div>
 </section>
+
+<section id="libview" hidden>
+  <div class="libtools">
+    <button data-f="all" class="on">All</button><button data-f="photo">📷 Photos</button><button data-f="video">🎞 Clips</button>
+    <span class="sp dim" id="libInfo"></span>
+    <button id="lRefresh">↻ Refresh</button><button id="lAll">Select all</button>
+    <button id="lDl" disabled>⬇ Download selected</button><button id="lZip">⬇ All as ZIP</button><button id="lDel" disabled>🗑 Delete</button>
+  </div>
+  <div id="grid"></div>
+</section>
+<dialog id="lb"><div id="lbBody"></div><div class="row"><a id="lbDl" class="btn" href="#">⬇ Download</a><button id="lbDel">🗑 Delete</button><button id="lbClose">Close</button></div><p id="lbName" class="dim"></p></dialog>
 
 <aside>
   <div class="row">
@@ -107,6 +135,8 @@ function onJSON(m) {
     case 'state': state = { ...state, ...m }; render(); break;
     case 'rec_status': recInfo = m; renderRec(); break;
     case 'rec_file_end': if (wantRec.has(m.id)) finishRec(m); break;
+    case 'lib': lib = m.items || []; renderLib(); break;
+    case 'lib_thumb': thumbBusy = false; thumbs.set(m.kind + ':' + m.id, m.data); updateThumb(m.kind + ':' + m.id); pump(); break;
     case 'error': toast('Phone: ' + m.msg); break;
   }
 }
@@ -188,6 +218,71 @@ for (const k of ['facing', 'res', 'fps', 'bitrate', 'codec']) $('#' + k).onchang
 $('#audio').onchange = (e) => set({ audio: e.target.checked });
 for (const k of ['streamFps', 'streamWidth', 'streamQuality', 'snapQuality']) $('#' + k).onchange = (e) => set({ [k]: Number(e.target.value) });
 $('#stream').onchange = (e) => send({ t: 'stream', on: e.target.checked });
+// ---- library tab ----
+let lib = [], libFilter = 'all', libSel = new Set(), thumbs = new Map(), thumbQ = [], thumbBusy = false;
+const ikey = (i) => i.kind + ':' + i.id;
+const q = () => `token=${encodeURIComponent(token)}`;
+const fileUrl = (i, dl) => `/files/${i.kind}/${i.id}?${q()}${dl ? '&download=1' : ''}`;
+const fmt = (n) => (n > 1e6 ? (n / 1e6).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1e3)) + ' KB');
+const shown = () => lib.filter((i) => libFilter === 'all' || i.kind === libFilter);
+function showTab(t) {
+  $('#view').hidden = t !== 'live'; $('#libview').hidden = t !== 'lib';
+  $('#tLive').classList.toggle('on', t === 'live'); $('#tLib').classList.toggle('on', t === 'lib');
+  if (t === 'lib') send({ t: 'lib_list', req: 0 });
+}
+function pump() {
+  if (thumbBusy || !thumbQ.length) return;
+  const i = thumbQ.shift(); thumbBusy = true; send({ t: 'lib_thumb', kind: i.kind, id: i.id });
+  setTimeout(() => { thumbBusy = false; pump(); }, 5000);          // never get stuck on a lost reply
+}
+function updateThumb(k) { const img = document.querySelector(`[data-k="${k}"] img`); if (img && thumbs.get(k)) img.src = thumbs.get(k); else { const ph = document.querySelector(`[data-k="${k}"] .ph`); if (ph && thumbs.get(k)) ph.outerHTML = `<img src="${thumbs.get(k)}">`; } }
+function renderLib() {
+  const items = shown(), grid = $('#grid'); grid.innerHTML = '';
+  libSel = new Set([...libSel].filter((k) => lib.some((i) => ikey(i) === k)));
+  document.querySelectorAll('.libtools [data-f]').forEach((b) => b.classList.toggle('on', b.dataset.f === libFilter));
+  const total = lib.reduce((a, i) => a + i.size, 0);
+  $('#libInfo').textContent = `${lib.filter((i) => i.kind === 'photo').length} photos · ${lib.filter((i) => i.kind === 'video').length} clips · ${fmt(total)}`;
+  $('#lDl').disabled = $('#lDel').disabled = !libSel.size; $('#lDl').textContent = libSel.size > 1 ? `⬇ Download ${libSel.size} (ZIP)` : '⬇ Download selected';
+  if (!items.length) grid.innerHTML = '<p class="dim">Nothing in the phone library yet.</p>';
+  for (const i of items) {
+    const k = ikey(i), card = document.createElement('div'); card.className = 'card' + (libSel.has(k) ? ' sel' : ''); card.dataset.k = k;
+    const th = thumbs.get(k);
+    card.innerHTML = (th ? `<img src="${th}">` : '<div class="ph">' + (i.kind === 'video' ? '🎞' : '📷') + '</div>') + (i.kind === 'video' ? `<span class="tag">▶ ${Math.round(i.secs || 0)}s</span>` : '') +
+      `<input type="checkbox" ${libSel.has(k) ? 'checked' : ''}><a class="dl" title="Download" href="${fileUrl(i, true)}">⬇</a><div class="cap"><b></b>${fmt(i.size)} · ${new Date(i.ts).toLocaleString()}</div>`;
+    card.querySelector('b').textContent = i.name;
+    card.querySelector('input').onclick = (e) => { e.stopPropagation(); e.target.checked ? libSel.add(k) : libSel.delete(k); renderLib(); };
+    card.querySelector('a.dl').onclick = (e) => e.stopPropagation();
+    card.onclick = () => openLb(i);
+    grid.append(card);
+    if (!th && !thumbs.has(k) && !thumbQ.some((x) => ikey(x) === k)) thumbQ.push(i);
+  }
+  pump();
+}
+function openLb(i) {
+  const body = $('#lbBody'); body.innerHTML = '';
+  const el = document.createElement(i.kind === 'photo' ? 'img' : 'video'); el.src = fileUrl(i);
+  if (i.kind === 'video') Object.assign(el, { controls: true, autoplay: true });
+  body.append(el); $('#lbName').textContent = `${i.name} · ${fmt(i.size)}${i.kind === 'video' ? ' — the clip is fetched from the phone first, give it a moment' : ''}`;
+  $('#lbDl').href = fileUrl(i, true); $('#lbDel').onclick = () => del([i]).then(() => $('#lb').close());
+  $('#lb').showModal();
+}
+async function del(items) {
+  if (!items.length || !confirm(`Delete ${items.length === 1 ? items[0].name : items.length + ' items'} from the phone? This cannot be undone.`)) return;
+  send({ t: 'lib_delete', items: items.map((i) => ({ kind: i.kind, id: i.id })) });
+}
+$('#lb').addEventListener('close', () => { $('#lbBody').innerHTML = ''; });
+$('#lbClose').onclick = () => $('#lb').close();
+$('#tLive').onclick = () => showTab('live'); $('#tLib').onclick = () => showTab('lib');
+document.querySelectorAll('.libtools [data-f]').forEach((b) => (b.onclick = () => { libFilter = b.dataset.f; renderLib(); }));
+$('#lRefresh').onclick = () => send({ t: 'lib_list', req: 0 });
+$('#lAll').onclick = () => { const it = shown(); libSel.size === it.length ? libSel.clear() : it.forEach((i) => libSel.add(ikey(i))); renderLib(); };
+$('#lDl').onclick = () => {
+  const picked = lib.filter((i) => libSel.has(ikey(i)));
+  if (picked.length === 1) return Object.assign(document.createElement('a'), { href: fileUrl(picked[0], true) }).click();
+  location.href = `/files.zip?${q()}&items=${picked.map(ikey).join(',')}`;
+};
+$('#lZip').onclick = () => { location.href = `/files.zip?${q()}${libFilter !== 'all' ? '&kind=' + libFilter : ''}`; };
+$('#lDel').onclick = () => del(lib.filter((i) => libSel.has(ikey(i))));
 setInterval(() => { render(); }, 1000);
 connect();
 </script>

@@ -39,6 +39,19 @@ Draggable, rotatable control toolbar and quick camera panel (zoom/torch/exposure
 ## GitHub Pages
 Repo → Settings → Pages → Source: **GitHub Actions**. (`.github/workflows/pages.yml`)
 
+## Downloading photos & clips to the PC
+Everything the phone has saved (see Library below) can be pulled to the PC four ways. The hub saves into `webcam-media/` by default (`--out DIR`).
+
+| Way | How |
+|---|---|
+| **Browser viewer** | `Library` tab: thumbnails, per-file ⬇, select several → ZIP, *All as ZIP*, preview, delete |
+| **Phone app** | Library → tap an item (or **Select**) → **→ PC** pushes it to the hub's folder |
+| **Command line** | `python python/webcam_hub.py --pull --out photos [--kind photo\|video] [--delete-after]` downloads everything and exits (`--list` just lists). Interactive prompt: `ls`, `get <#\|name\|latest\|all>`, `pull`, `rm <#>` |
+| **Python API** | `hub.library()`, `hub.download("latest", "out_dir")`, `hub.download_all("out_dir", kind="video", delete_after=False)`, `hub.delete(items)`; pushed files fire `hub.on_file(path, meta)` |
+| **HTTP** (curl, any language) | `curl -k "https://IP:PORT/files?token=T"` list · `/files/photo/<id>` · `/files/latest?kind=video` · `/files.zip[?kind=photo]` · `/snapshot` (fresh JPEG). Add `&download=1` for a save-as header; token may also be sent as `Authorization: Bearer T` |
+
+Downloads are verified (size check) and written via a `.part` file; `download_all` skips files already present and never overwrites different files that share a name.
+
 ## Library (clips + photos)
 Snapshots are now saved in the phone's app storage just like recordings. The **Library** panel lists clips and photos together with thumbnails: filter (All / Clips / Photos), tap to preview, rename, download, share or delete, or tap **Select** for bulk download/share/delete.
 
