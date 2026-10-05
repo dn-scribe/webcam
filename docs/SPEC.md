@@ -30,6 +30,7 @@ Everything else is optional: the token is off by default, and no pairing step is
 * The CA is downloadable at `https://<hub>/ca.crt`. Installing it on the phone once removes all warnings and enables
   scanning (§6). Without it the user can accept the browser's certificate warning once instead.
 * `--cert/--key` replaces the whole scheme with your own certificate.
+* **Plain HTTP mode** (`--no-tls`, implies `--serve-app`): no certificates; the hub serves the PWA over `http://` and phones use `ws://` (an `http://` page defaults the app's TLS setting to off). Chrome only exposes `getUserMedia`/service workers on secure contexts, so each phone must add the hub origin to `chrome://flags/#unsafely-treat-insecure-origin-as-secure`. Everything else in this document is unchanged.
 
 ### 1.2 Trust model
 * Default **open**: no token. Clients outside private ranges (RFC 1918, link-local, 100.64/10, loopback; IPv4-mapped IPv6 included)

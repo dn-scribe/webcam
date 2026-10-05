@@ -11,7 +11,7 @@ const DEFAULTS = {
   photoRes: 'max', aspect: 'native', facing: 'environment', deviceId: '', res: '1280x720', fps: 30, audio: false, bitrate: 'medium', codec: 'auto',
   streamOn: false, streamFps: 10, streamWidth: 640, streamQuality: 0.6, snapQuality: 0.92,
   adv: {}, ui: {},
-  hub: { host: '', port: 8765, token: '', tls: true, auto: true, name: 'cam-' + Math.random().toString(36).slice(2, 6), range: '', hubName: '' },
+  hub: { host: '', port: 8765, token: '', tls: location.protocol !== 'http:', auto: true, name: 'cam-' + Math.random().toString(36).slice(2, 6), range: '', hubName: '' },
 };
 const CAMERA_KEYS = ['facing', 'deviceId', 'res', 'fps', 'audio', 'aspect'];
 const STREAM_KEYS = ['streamFps', 'streamWidth', 'streamQuality', 'snapQuality'];

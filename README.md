@@ -29,6 +29,18 @@ python python/webcam_hub.py
 
 Without a CA the phone can still connect to a known address (type it, or use the link/QR the hub prints); only *scanning* needs the trusted certificate.
 
+## Plain HTTP mode (no certificates, no CA, no red icon)
+
+Can the LAN just use `http://`? Not out of the box: Chrome only allows the camera (and service workers) on a *secure context*, and `http://192.168.x.x` isn't one; a GitHub Pages (HTTPS) page also can't open a plain `ws://` socket. The way round is to serve the app from the hub over HTTP and tell Chrome on each phone, once, to treat that origin as secure:
+
+```bash
+python python/webcam_hub.py --no-tls            # implies --serve-app
+```
+1. On the phone open `chrome://flags/#unsafely-treat-insecure-origin-as-secure`, add `http://<hub-ip>:8765` (the hub prints it), set **Enabled**, tap **Relaunch**.
+2. Open `http://<hub-ip>:8765/` (not the GitHub page). The app connects with plain `ws://`, no certificates anywhere; scanning, naming, viewer, library and downloads all work as before.
+
+Trade-offs: traffic on your LAN is unencrypted (use a token on shared networks); the flag must match the hub's address, so give the PC a fixed/reserved IP; the app is served by the hub, so it isn't the GitHub Pages copy (no auto-update from Pages, and offline use depends on the hub being reachable the first time). Prefer the default HTTPS mode unless certificates are the thing you want to avoid.
+
 ## Naming: each side selects the other by name
 
 | Name of | Set in | Used for |
@@ -66,7 +78,7 @@ python python/webcam_hub.py [options]
 | `--list` / `--pull` | Non-interactive: print / download the phone's library, then exit (`--kind photo\|video`, `--delete-after`, `--wait SEC`, `--all-cameras --expect N` for every camera into its own sub-folder) |
 | `--cert F --key F` | Use your own certificate instead of the generated CA (e.g. from `mkcert`) |
 | `--serve-app [DIR]` | Also serve the PWA from the hub (camera works; no offline install because of the certificate) |
-| `--no-tls` | Plain `ws://` — only for an `http://` page such as `--serve-app` with a flag-enabled browser; rarely useful |
+| `--no-tls` | Plain HTTP / `ws://`, no certificates at all (implies `--serve-app`; needs a Chrome flag on each phone — see *Plain HTTP mode*) |
 | `--quiet` | No banner/QR (scripts) |
 
 Interactive prompt: `cams`, `use <camera>`, `state`, `snap [quality]`, `rec start|stop`, `stream on|off [fps]`, `set key=value …` (e.g. `res=1920x1080 fps=30 facing=user zoom=2 torch=true bitrate=low codec=vp9`), `frame`, `ls [photo|video]`, `get <#|name|latest|all>`, `pull`, `rm <#|name>`, `quit`.
@@ -136,6 +148,7 @@ curl -k "https://IP:8765/snapshot?quality=0.9" -o now.jpg      # fresh photo (al
 | Symptom | Likely cause / fix |
 |---|---|
 | Status flashes *connecting → offline*, "code 1006" in a few ms | The phone doesn't trust the hub certificate (or wrong IP/port). Use **Test connection**: it says whether the host is unreachable (firewall / other network) or refused. Install the CA or open `https://<hub-ip>:8765/` and accept once. The hub prints each request and TLS failure in its console |
+| Want plain `http://` | See *Plain HTTP mode* (`--no-tls` + a Chrome flag) |
 | Red “Not secure” icon next to the address in Chrome / the installed app (the hub still works) | Chrome flags any page that used a connection whose certificate was accepted by hand (the *accept the warning* route). Install the hub's CA as a **CA certificate** (not “VPN and app user certificate”), verify it under *Settings → Security → Encryption & credentials → Trusted credentials → User*, fully close and reopen Chrome/the app |
 | *Find hub on LAN* finds nothing | The phone must trust the hub cert (CA install); same Wi-Fi (no guest/AP isolation); the hub's firewall must allow the port; type a **Scan range** if the app can't work out the network |
 | Several hubs, wrong one chosen | Set the app's **Hub name** (or start hubs with distinct `--name`s) |

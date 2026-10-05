@@ -294,6 +294,10 @@ class Hub:
               f"{'token: ' + self.token if self.token else 'OPEN: no token, LAN clients only'}")
         print(f"  Phone: open {self.app_url}, put \"{self.name}\" in its 'Hub name' field (optional) — it finds this hub on the LAN by itself,")
         print(f"         or tap through {self.connect_url}")
+        if not self.tls:
+            print(f"  PLAIN HTTP mode (no certificates). Chrome only allows the camera on a secure origin, so on EACH phone, once:")
+            print(f"    chrome://flags/#unsafely-treat-insecure-origin-as-secure  → add  http://{self.ip}:{self.port}  → Enabled → Relaunch")
+            print(f"    then open http://{self.ip}:{self.port}/ . (If the PC/router changes this IP, update the flag, or give the PC a fixed IP.)")
         if self.tls and self.ca_path:
             print(f"  First time only, to silence the certificate warning and allow auto-discovery,")
             print(f"  install the hub's CA on the phone: download {self.ca_url}, then")
@@ -914,7 +918,7 @@ def cli():
     ap.add_argument("--name", help="name of this hub, shown to phones (they can pick a hub by it). Default: host name")
     ap.add_argument("--token", default="", help="require this shared secret ('auto' = random). Default: open, no token")
     ap.add_argument("--allow-public", action="store_true", help="also accept clients outside private/LAN address ranges")
-    ap.add_argument("--no-tls", action="store_true", help="plain ws:// (only usable from an http:// page, e.g. --serve-app)")
+    ap.add_argument("--no-tls", action="store_true", help="plain HTTP/ws:// with no certificates; implies --serve-app (see README: needs a Chrome flag on the phone)")
     ap.add_argument("--cert"); ap.add_argument("--key")
     ap.add_argument("--serve-app", nargs="?", const=str(Path(__file__).resolve().parent.parent),
                     help="also serve the PWA files from this dir (default: repo root)")
@@ -930,6 +934,8 @@ def cli():
     ap.add_argument("--wait", type=float, default=120, help="seconds to wait for the phone with --list/--pull")
     ap.add_argument("--quiet", action="store_true", help="no banner/QR (for scripts)")
     a = ap.parse_args()
+    if a.no_tls and a.serve_app is None:     # an https:// page can't open ws://, so plain-HTTP mode must serve the app itself
+        a.serve_app = str(Path(__file__).resolve().parent.parent)
 
     hub = Hub(port=a.port, token=a.token, tls=not a.no_tls, cert=a.cert, key=a.key, app_dir=a.serve_app,
               quiet=a.quiet, save_dir=a.out, allow_public=a.allow_public, name=a.name)
