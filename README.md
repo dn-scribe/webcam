@@ -136,6 +136,7 @@ curl -k "https://IP:8765/snapshot?quality=0.9" -o now.jpg      # fresh photo (al
 | Symptom | Likely cause / fix |
 |---|---|
 | Status flashes *connecting → offline*, "code 1006" in a few ms | The phone doesn't trust the hub certificate (or wrong IP/port). Use **Test connection**: it says whether the host is unreachable (firewall / other network) or refused. Install the CA or open `https://<hub-ip>:8765/` and accept once. The hub prints each request and TLS failure in its console |
+| Red “Not secure” icon next to the address in Chrome / the installed app (the hub still works) | Chrome flags any page that used a connection whose certificate was accepted by hand (the *accept the warning* route). Install the hub's CA as a **CA certificate** (not “VPN and app user certificate”), verify it under *Settings → Security → Encryption & credentials → Trusted credentials → User*, fully close and reopen Chrome/the app |
 | *Find hub on LAN* finds nothing | The phone must trust the hub cert (CA install); same Wi-Fi (no guest/AP isolation); the hub's firewall must allow the port; type a **Scan range** if the app can't work out the network |
 | Several hubs, wrong one chosen | Set the app's **Hub name** (or start hubs with distinct `--name`s) |
 | `LookupError: several cameras connected` | Pass `camera="name"` or call `hub.use("name")` |
