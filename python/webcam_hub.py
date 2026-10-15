@@ -887,14 +887,18 @@ class Hub:
     def rec_stop(self, camera=None):
         self._run(self._csend(self._pick(camera), {"t": "rec", "action": "stop"}))
 
-    def rec_fetch(self, timeout=600, camera=None):
-        """Pull the last finished recording from the phone -> (bytes, filename)."""
+    def _last_rec_id(self, cam):
+        return ((cam.state.get("recording") or {}).get("last") or {}).get("id")
+
+    def rec_fetch(self, timeout=600, camera=None, after_id=None):
+        """Pull the last finished recording from the phone -> (bytes, filename).
+        `after_id`: ignore a finished recording with this id (the take before the current one)."""
         cam = self._pick(camera)
 
         async def go():
-            for _ in range(100):  # wait for the phone to finish finalising the file
+            for _ in range(300):  # wait for the phone to finish finalising the file (up to 30 s)
                 rec = cam.state.get("recording") or {}
-                if rec.get("last") and rec.get("state") == "idle":
+                if rec.get("last") and rec["last"]["id"] != after_id and rec.get("state") == "idle":
                     break
                 await asyncio.sleep(0.1)
             else:
@@ -906,9 +910,10 @@ class Hub:
         return self._run(go(), timeout + 2)
 
     def rec_stop_and_fetch(self, camera=None):
+        prev = self._last_rec_id(self._pick(camera))
         self.rec_stop(camera=camera)
         time.sleep(0.5)
-        return self.rec_fetch(camera=camera)
+        return self.rec_fetch(camera=camera, after_id=prev)
 
 
 # ---------------------------------------------------------------- CLI
