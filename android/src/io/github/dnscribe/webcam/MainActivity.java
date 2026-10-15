@@ -227,7 +227,7 @@ public class MainActivity extends Activity implements CameraService.UiListener, 
         CameraService s = CameraService.get();
         if (s == null) return;
         if (s.camera().isRecording()) s.device().recStop();
-        else { String e = s.device().recStart(); if (e != null) Toast.makeText(this, e, Toast.LENGTH_LONG).show(); }
+        else { String e = s.device().recStart(""); if (e != null) Toast.makeText(this, e, Toast.LENGTH_LONG).show(); }
     }
 
     // ------------------------------------------------------------------ service -> UI

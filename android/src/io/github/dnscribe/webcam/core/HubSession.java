@@ -202,7 +202,7 @@ public class HubSession {
             }
             case "rec": {
                 String a = m.optString("action");
-                if (a.equals("start")) { String err = dev.recStart(); if (err != null) sendError(m.has("id") ? m.optLong("id") : null, null, err); }
+                if (a.equals("start")) { String err = dev.recStart(m.optString("label", "")); if (err != null) sendError(m.has("id") ? m.optLong("id") : null, null, err); }
                 else if (a.equals("stop")) dev.recStop();
                 else if (a.equals("send")) {
                     final LibraryStore.Item it = dev.recItem(m.optLong("id"));
@@ -210,6 +210,22 @@ public class HubSession {
                     else xfer.submit(new Runnable() { public void run() { try { sendFile(3, it.id, it, false); } catch (Exception e) { sendError(it.id, null, String.valueOf(e.getMessage())); } } });
                 } else if (a.equals("discard")) dev.discardRec(m.optLong("id"));
                 sendRecStatus();
+                break;
+            }
+            case "clock":                  // the hub measuring this phone's clock against its own (NTP style): answer at once
+                send(Json.obj("t", "clock_reply", "id", m.opt("id"), "host_t", m.opt("host_t"), "phone_wall_ms", dev.wallMs(), "phone_mono_ns", dev.monoNs()));
+                break;
+            case "mark": {                 // an annotation to keep with the recording in progress
+                JSONObject r = dev.mark(m.optString("text"), m.optDouble("host_t", 0));
+                r.put("t", "mark_ack"); r.put("id", m.opt("id"));
+                send(r);
+                break;
+            }
+            case "rec_meta": {
+                JSONObject meta = dev.recMeta(m.optLong("id"));
+                JSONObject o = Json.obj("t", "rec_meta", "req", m.opt("req"), "id", m.optLong("id"), "found", meta != null);
+                if (meta != null) o.put("meta", meta);
+                send(o);
                 break;
             }
             case "lib_list": send(Json.obj("t", "lib", "req", m.opt("req"), "items", dev.library().toJson())); break;

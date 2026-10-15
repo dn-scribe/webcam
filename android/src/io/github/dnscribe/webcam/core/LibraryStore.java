@@ -130,10 +130,16 @@ public class LibraryStore {
     }
 
     /** A new file name inside the library for a recorder to write to. */
-    public synchronized File newVideoFile(String ext) {
-        File f = new File(dir, "rec-" + stamp(new Date(), false) + "." + ext);
+    public synchronized File newVideoFile(String ext) { return newVideoFile(ext, ""); }
+
+    /** With a label the name reads rec-<stamp>-<label>.<ext> (label: letters, digits, _ . -, at most 40). */
+    public synchronized File newVideoFile(String ext, String label) {
+        String l = label == null ? "" : label.replaceAll("[^A-Za-z0-9_.-]", "_");
+        if (l.length() > 40) l = l.substring(0, 40);
+        String tail = l.isEmpty() ? "" : "-" + l;
+        File f = new File(dir, "rec-" + stamp(new Date(), false) + tail + "." + ext);
         int n = 1;
-        while (f.exists()) f = new File(dir, "rec-" + stamp(new Date(), false) + "-" + (n++) + "." + ext);
+        while (f.exists()) f = new File(dir, "rec-" + stamp(new Date(), false) + tail + "-" + (n++) + "." + ext);
         return f;
     }
 
@@ -152,7 +158,7 @@ public class LibraryStore {
         synchronized (this) {
             Item it = findLocked(kind, id);
             if (it == null) return false;
-            items.remove(it); it.file.delete();
+            items.remove(it); it.file.delete(); RecMeta.sidecar(it.file).delete();
         }
         changed();
         return true;

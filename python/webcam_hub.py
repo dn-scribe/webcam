@@ -203,7 +203,8 @@ class _Cam:
 
 
 _CAM_METHODS = {"set", "get_state", "stream", "latest_frame", "snapshot", "rec_start", "rec_stop", "rec_fetch",
-                "rec_stop_and_fetch", "library", "find", "download", "download_all", "delete", "wait_for_phone"}
+                "rec_stop_and_fetch", "library", "find", "download", "download_all", "delete", "wait_for_phone",
+                "clock_sync", "mark", "rec_meta"}
 
 
 class CameraView:
@@ -407,7 +408,7 @@ class Hub:
         path, q = url.path, parse_qs(url.query)
         if path in ("/ws", "/ui"):
             return None
-        if path in ("/files", "/files.zip", "/snapshot", "/cameras") or path.startswith("/files/"):
+        if path in ("/files", "/files.zip", "/snapshot", "/cameras", "/rec", "/mark", "/clock", "/rec_meta") or path.startswith("/files/"):
             return await self._api(path, q, request)
         if path == "/ca.crt" and self.ca_path:
             return self._reply(200, self.ca_path.read_bytes(), "application/x-x509-ca-cert", "webcam-hub-ca.crt", False)
@@ -444,6 +445,10 @@ class Hub:
              GET /files/<photo|video>/<id>[?download=1]   one file;  /files/latest?kind=photo
              GET /files.zip[?kind=..|items=photo:ID,video:ID]   several files as a ZIP
              GET /snapshot[?quality=0.9&download=1]       take a fresh JPEG now
+             GET /rec?action=start|stop[&label=run0204]   start / stop a clip on the phone (label goes into the file name)
+             GET /mark?text=layer+12                      an annotation kept with the recording in progress
+             GET /clock[?n=8]                             the phone's clock against this hub's (offset_ms, rtt_ms)
+             GET /rec_meta[?id=]                          clocks at the first frame + marks of a finished clip (default: the last)
            All camera routes accept ?camera=NAME (exact / substring / glob)."""
         auth = request.headers.get("Authorization", "")
         tok = (q.get("token") or [""])[0] or (auth[7:] if auth.startswith("Bearer ") else "")
@@ -460,6 +465,20 @@ class Hub:
         inline = (q.get("download") or ["0"])[0] != "1"
         kind = (q.get("kind") or [None])[0]
         try:
+            if path == "/rec":
+                action = (q.get("action") or [""])[0]
+                if action not in ("start", "stop"):
+                    return self._reply(400, "action must be start or stop")
+                await self._csend(cam, {"t": "rec", "action": action, **({"label": q["label"][0]} if q.get("label") else {})})
+                return self._reply(200, json.dumps({"ok": True, "camera": cam.name, "action": action}), "application/json")
+            if path == "/mark":
+                ack = await self._amark(cam, (q.get("text") or [""])[0])
+                return self._reply(200, json.dumps(ack), "application/json")
+            if path == "/clock":
+                return self._reply(200, json.dumps(await self._aclock(cam, int((q.get("n") or ["8"])[0]))), "application/json")
+            if path == "/rec_meta":
+                rid = int(q["id"][0]) if q.get("id") else None
+                return self._reply(200, json.dumps(await self._ameta(cam, rid)), "application/json")
             if path == "/snapshot":
                 quality = float(q["quality"][0]) if "quality" in q else None
                 jpg = await self._asnap(cam, quality)
@@ -694,6 +713,13 @@ class Hub:
             cam.state.update(m)
         elif t == "rec_status":
             cam.state["recording"] = m
+        elif t == "clock_reply":
+            m["_hub_recv"] = time.time()
+            self._resolve(("clock", m.get("id")), m)
+        elif t == "mark_ack":
+            self._resolve(("mark", m.get("id")), m)
+        elif t == "rec_meta":
+            self._resolve(("meta", m.get("req")), m)
         elif t == "rec_file_end":
             parts = self._rec_chunks.pop((cam.name, m["id"]), {})
             data = b"".join(parts[i] for i in range(m["chunks"]) if i in parts)
@@ -750,6 +776,55 @@ class Hub:
 
     async def _csend(self, cam: _Cam, obj):
         await cam.ws.send(json.dumps(obj))
+
+    async def _aclock(self, cam, n=8, timeout=5):
+        """The phone's wall clock against this hub's, NTP style: n round trips, the one with the shortest round trip wins. `offset_ms` is
+        phone minus hub (add it to a hub time to get the phone's time); `rtt_ms` bounds its error (half of it, at worst)."""
+        best = None
+        for _ in range(max(1, n)):
+            cid = self._rid()
+            fut = self._waiters[("clock", cid)] = self._loop.create_future()
+            t0 = time.time()
+            await self._csend(cam, {"t": "clock", "id": cid, "host_t": t0})
+            try:
+                r = await asyncio.wait_for(fut, timeout)
+            except asyncio.TimeoutError:
+                self._waiters.pop(("clock", cid), None)
+                continue
+            t1 = r["_hub_recv"]
+            rtt = t1 - t0
+            offset = r["phone_wall_ms"] / 1000.0 - (t0 + t1) / 2
+            if best is None or rtt < best["rtt"]:
+                best = {"rtt": rtt, "offset": offset, "phone_mono_ns": r["phone_mono_ns"], "hub_t": (t0 + t1) / 2}
+            await asyncio.sleep(0.02)
+        if best is None:
+            raise asyncio.TimeoutError("the phone did not answer the clock exchange")
+        return {"offset_ms": round(best["offset"] * 1000, 2), "rtt_ms": round(best["rtt"] * 1000, 2), "samples": n,
+                "hub_t": best["hub_t"], "phone_mono_ns": best["phone_mono_ns"]}
+
+    async def _amark(self, cam, text, timeout=5):
+        mid = self._rid()
+        fut = self._waiters[("mark", mid)] = self._loop.create_future()
+        await self._csend(cam, {"t": "mark", "id": mid, "text": text, "host_t": time.time()})
+        try:
+            return await asyncio.wait_for(fut, timeout)
+        finally:
+            self._waiters.pop(("mark", mid), None)
+
+    async def _ameta(self, cam, rec_id=None, timeout=10):
+        rid = rec_id if rec_id is not None else self._last_rec_id(cam)
+        if rid is None:
+            raise LookupError("no finished recording to describe")
+        req = self._rid()
+        fut = self._waiters[("meta", req)] = self._loop.create_future()
+        await self._csend(cam, {"t": "rec_meta", "req": req, "id": rid})
+        try:
+            r = await asyncio.wait_for(fut, timeout)
+        finally:
+            self._waiters.pop(("meta", req), None)
+        if not r.get("found"):
+            raise LookupError(f"the phone has no record for recording {rid}")
+        return {"id": rid, **r["meta"]}
 
     async def _alib(self, cam, timeout=15):
         req = self._rid()
@@ -881,8 +956,25 @@ class Hub:
         return len(picked)
 
     # ---- recording ----
-    def rec_start(self, camera=None):
-        self._run(self._csend(self._pick(camera), {"t": "rec", "action": "start"}))
+    def rec_start(self, camera=None, label=None):
+        """Start a clip. `label` (letters, digits, _ . -) goes into the file name, e.g. rec_start(label="run0204")."""
+        self._run(self._csend(self._pick(camera), {"t": "rec", "action": "start", **({"label": label} if label else {})}))
+
+    def clock_sync(self, n=8, camera=None):
+        """The phone's clock against this computer's: {offset_ms (phone - hub), rtt_ms, samples, hub_t, phone_mono_ns}. Error <= rtt/2."""
+        cam = self._pick(camera)
+        return self._run(self._aclock(cam, n), 5 * n + 5)
+
+    def mark(self, text, camera=None):
+        """An annotation kept with the recording in progress (written beside the clip). Returns the phone's ack:
+        {recording, phone_wall_ms, phone_mono_ns, rec_ms}; `recording` False = nothing is being recorded, the mark was dropped."""
+        cam = self._pick(camera)
+        return self._run(self._amark(cam, text))
+
+    def rec_meta(self, id=None, camera=None):
+        """The record kept beside a finished clip: {id, name, label, started, start_wall_ms, start_mono_ns, duration_ms, marks:[...]} (default: the last clip)."""
+        cam = self._pick(camera)
+        return self._run(self._ameta(cam, id))
 
     def rec_stop(self, camera=None):
         self._run(self._csend(self._pick(camera), {"t": "rec", "action": "stop"}))
