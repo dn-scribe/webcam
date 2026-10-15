@@ -43,14 +43,19 @@ Trade-offs: traffic on your LAN is unencrypted (use a token on shared networks);
 
 ## Android app (runs in the background)
 
-For a real webcam that keeps going with the screen locked and no Chrome involved, there is a native Android app with the same protocol (so the hub, CLI, HTTP API and viewer work unchanged). It builds with plain `make`:
+For a real webcam that keeps going with the screen locked and no Chrome involved there is a native Android app with the same protocol, so the hub, CLI, HTTP API and viewer work unchanged. It builds with plain `make` (JDK 17+, python3, internet for the first build):
 
 ```bash
-make sdk && make apk && make install     # SDK bootstrap once; the APK lands in build/android/
-make check                               # compile-check against the Android API (no SDK needed)
-make test-protocol                       # the app's real protocol code vs the real hub (no SDK/phone needed)
+make sdk                 # once: Android command-line tools + platform 34 + build-tools
+make dev                 # build + install + provision (permissions, battery whitelist, background appops) + start   [ADB_FLAGS="-s SERIAL"]
+make watch               # optional babysitter: restarts the app from the PC if the camera service goes away
+make phone-info logs shot lock wake kill    # debugging helpers (see `make help`)
+make check               # compile-check against the Android API (no SDK needed)
+make test-protocol       # the app's real protocol code vs the real hub (no SDK/phone needed)
 ```
-It runs as a foreground service (camera + microphone), finds the hub on the LAN by itself, accepts the hub's certificate on the LAN (no CA install, no Chrome flag) and also speaks plain `ws://`. See [docs/ANDROID.md](docs/ANDROID.md).
+It runs as a foreground service (camera + microphone) with wake and Wi-Fi locks, finds the hub on the LAN by itself, accepts the hub's certificate on the LAN (no CA install, no Chrome flag) and also speaks plain `ws://`. For unattended use: plug it in, run `make provision`, allow “unrestricted battery use” in the phone's settings, and optionally leave `make watch` running.
+
+**Status: the app compiles and its protocol code is tested against the hub, but it has not been run on a phone yet.** The first on-device session, the known risks and the roadmap are in [docs/TODO.md](docs/TODO.md); details in [docs/ANDROID.md](docs/ANDROID.md).
 
 ## Naming: each side selects the other by name
 
@@ -190,4 +195,5 @@ python/requirements.txt              websockets, cryptography, (qrcode)
 tools/bump.py  tools/make_icons.py   version bump, icon generator
 .github/workflows/pages.yml          deploy to GitHub Pages
 docs/SPEC.md                         protocol and design
+docs/ANDROID.md  docs/TODO.md        Android app: build, provisioning, debugging; TODO, risks, first device session
 ```

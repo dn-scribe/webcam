@@ -1,14 +1,19 @@
 # Android app for the IP Webcam (native counterpart of the PWA: same hub protocol, but runs as a foreground service).
-# Plain make + the Android SDK command-line tools; no Gradle. See docs/ANDROID.md.
+# Plain make + the Android SDK command-line tools; no Gradle. See docs/ANDROID.md and docs/TODO.md.
 #
-#   make sdk            one-time: download the Android SDK command-line tools + platform/build-tools (needs JDK 17+, internet)
-#   make apk            build + sign build/android/webcam-<version>.apk
-#   make install        adb install -r -g (grants the camera/mic/notification permissions)   [ADB_FLAGS="-s SERIAL"]
-#   make run | stop | logs | uninstall | devices
-#   make test-protocol  run the protocol tests: the real Java protocol code against the real Python hub (no SDK/phone needed)
-#   make check          compile-check everything against android.jar
-#   make deploy-gil     rsync the tree to the build/test machine and build+install there   [REMOTE=printer@gil.home]
-
+#   make sdk              one-time: download the Android SDK command-line tools + platform/build-tools (needs JDK 17+, internet)
+#   make apk              build + sign build/android/webcam-<version>.apk
+#   make install          adb install -r -g            [ADB_FLAGS="-s SERIAL"]
+#   make provision        adb: grant permissions, battery whitelist, background appops     [OVERLAY=1 STAY_AWAKE=1 for the optional extras]
+#   make dev              apk + install + provision + run
+#   make run | stop | kill | logs | shot | uninstall | devices | wifi-adb PHONE_IP=...
+#   make phone-info       model / Android version / lock state / camera users / permissions / battery whitelist
+#   make provision-status    check what provision set up
+#   make lock | wake      screen off+lock / wake  (for the lock-screen test)
+#   make watch            babysit the phone from here: restart the app if the camera service is not in the foreground
+#   make check            compile-check everything against android.jar (no SDK needed)
+#   make test-protocol    the real Java protocol code against the real Python hub (no SDK, no phone)
+#   make deploy-gil       rsync the tree to the build/test machine and build+install there   [REMOTE=printer@gil.home]
 APP_ID       := io.github.dnscribe.webcam
 VERSION      := $(shell sed -n 's/.*APP_VERSION = "\([^"]*\)".*/\1/p' version.js)
 VERSION_CODE := $(shell echo $(VERSION) | awk -F. '{ print $$1*10000 + $$2*100 + $$3 }')
@@ -20,6 +25,10 @@ ADB          ?= adb
 ADB_FLAGS    ?=
 REMOTE       ?= printer@gil.home
 REMOTE_DIR   ?= webcam-build
+WATCH_SECS   ?= 30
+PHONE_IP     ?=
+OVERLAY      ?=
+STAY_AWAKE   ?=
 
 # ---- Android SDK discovery ----
 SDK ?= $(firstword $(wildcard $(ANDROID_HOME) $(ANDROID_SDK_ROOT) $(HOME)/Android/Sdk $(HOME)/Library/Android/sdk $(HOME)/android-sdk))
@@ -54,11 +63,12 @@ KS_PASS ?= android
 KS_ALIAS ?= webcam
 JAVAC := javac --release 11 -Xlint:-options -Xlint:-deprecation
 
-.PHONY: help apk install run stop uninstall logs devices sdk check test-protocol clean deploy-gil libs sdk-check keystore
+.PHONY: help apk install run stop kill uninstall logs shot devices sdk check test-protocol clean deploy-gil libs sdk-check keystore \
+        provision provision-status phone-info dev lock wake watch wifi-adb
 .DEFAULT_GOAL := help
 
 help:
-	@sed -n '2,11p' Makefile | sed 's/^# \{0,1\}//'
+	@awk '/^#/ { sub(/^# ?/, ""); print; next } { exit }' Makefile
 	@echo; echo "version $(VERSION) (code $(VERSION_CODE)); SDK: $(if $(SDK),$(SDK) build-tools $(BT),NOT FOUND - run 'make sdk')"
 
 # ------------------------------------------------------------------ libraries
@@ -137,6 +147,70 @@ logs:
 deploy-gil:
 	rsync -az --delete --exclude .git --exclude build --exclude '*.keystore' ./ $(REMOTE):$(REMOTE_DIR)/
 	ssh $(REMOTE) 'cd $(REMOTE_DIR) && make apk install run ADB_FLAGS="$(ADB_FLAGS)"'
+
+# ------------------------------------------------------------------ phone provisioning / unattended running (all via adb)
+SH = $(ADB) $(ADB_FLAGS) shell
+
+# Each step may be refused by some Android versions or makers (shown, not fatal: the leading '-').
+provision:
+	@echo "== provisioning $(APP_ID) on the attached phone"
+	-$(SH) pm grant $(APP_ID) android.permission.CAMERA
+	-$(SH) pm grant $(APP_ID) android.permission.RECORD_AUDIO
+	-$(SH) pm grant $(APP_ID) android.permission.POST_NOTIFICATIONS
+	-$(SH) dumpsys deviceidle whitelist +$(APP_ID)
+	-$(SH) cmd appops set $(APP_ID) RUN_ANY_IN_BACKGROUND allow
+	-$(SH) cmd appops set $(APP_ID) RUN_IN_BACKGROUND allow
+	-$(SH) am set-standby-bucket $(APP_ID) active
+	$(if $(OVERLAY),-$(SH) cmd appops set $(APP_ID) SYSTEM_ALERT_WINDOW allow)
+	$(if $(STAY_AWAKE),-$(SH) settings put global stay_on_while_plugged_in 3)
+	@echo "== done. Vendor battery managers (Xiaomi/Huawei/Oppo/Samsung) may still need 'unrestricted'/auto-start set by hand: see docs/ANDROID.md"
+
+provision-status:
+	@echo "-- runtime permissions"; $(SH) "dumpsys package $(APP_ID) | grep -E 'android.permission.(CAMERA|RECORD_AUDIO|POST_NOTIFICATIONS): granted'" || true
+	@echo "-- battery whitelist"; $(SH) "dumpsys deviceidle whitelist | grep $(APP_ID)" || echo "(not whitelisted)"
+	@echo "-- appops"; $(SH) "cmd appops get $(APP_ID) RUN_ANY_IN_BACKGROUND" || true
+	@echo "-- standby bucket"; $(SH) "am get-standby-bucket $(APP_ID)" || true
+	@echo "-- camera service"; $(SH) "dumpsys activity services $(APP_ID)/.CameraService | grep -E 'ServiceRecord|isForeground|foregroundServiceType' | head -5" || echo "(service not running)"
+
+phone-info:
+	@echo "-- device"; $(SH) "getprop ro.product.manufacturer; getprop ro.product.model; getprop ro.build.version.release; getprop ro.build.version.sdk"
+	@echo "-- lock / screen state"; $(SH) "dumpsys window | grep -E 'isKeyguardShowing|mDreamingLockscreen|mAwake|screenState' | head -6" || true
+	@echo "-- lock method (empty = no PIN)"; $(SH) "locksettings get-disabled" || true
+	@echo "-- cameras and who is using them"; $(SH) "dumpsys media.camera | grep -E 'Device [0-9]|Facing|Orientation|Client|Camera ID' | head -30" || true
+	@echo "-- app"; $(SH) "dumpsys package $(APP_ID) | grep -E 'versionName|versionCode' | head -3" || echo "(not installed)"
+	$(MAKE) --no-print-directory provision-status
+
+dev: install provision run
+
+lock:
+	$(SH) input keyevent KEYCODE_SLEEP
+
+wake:
+	$(SH) input keyevent KEYCODE_WAKEUP
+
+kill:
+	@echo "kill the app's background process (like the system reclaiming memory); the foreground service should come back or be restarted by 'make watch'"
+	$(SH) am kill $(APP_ID)
+
+shot:
+	mkdir -p $(BUILD)
+	$(ADB) $(ADB_FLAGS) exec-out screencap -p > $(BUILD)/screen.png
+	@echo "saved $(BUILD)/screen.png"
+
+wifi-adb:
+	@test -n "$(PHONE_IP)" || { echo "usage: make wifi-adb PHONE_IP=192.168.x.y   (phone attached by USB once)"; exit 1; }
+	$(ADB) $(ADB_FLAGS) tcpip 5555
+	$(ADB) connect $(PHONE_IP):5555
+
+# Babysit the phone from here: if the camera service is not a foreground service, wake the screen and start the app
+# (an Activity on screen is what allows Android 12+ to open the camera again). Leave it running in a terminal.
+watch:
+	@echo "watching $(APP_ID) every $(WATCH_SECS)s (Ctrl-C to stop)"
+	@while true; do \
+	  if $(ADB) $(ADB_FLAGS) shell dumpsys activity services $(APP_ID)/.CameraService 2>/dev/null | grep -q "isForeground=true"; then :; \
+	  else echo "$$(date +%T) camera service not in the foreground - waking the phone and starting the app"; \
+	    $(ADB) $(ADB_FLAGS) shell input keyevent KEYCODE_WAKEUP; $(ADB) $(ADB_FLAGS) shell am start -n $(APP_ID)/.MainActivity >/dev/null; fi; \
+	  sleep $(WATCH_SECS); done
 
 # ------------------------------------------------------------------ tests / checks
 # Compile-check the whole app against the framework API: android.jar from the SDK when present, otherwise the

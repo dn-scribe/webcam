@@ -28,6 +28,7 @@
         android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
 
         <activity android:name=".MainActivity" android:exported="true" android:launchMode="singleTask"
+            android:showWhenLocked="true" android:turnScreenOn="true"
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|smallestScreenSize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

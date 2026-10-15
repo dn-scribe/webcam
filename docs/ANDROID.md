@@ -53,6 +53,27 @@ or just `git pull` on that machine and run the commands above.
 
 **Keep it alive:** ⚙ → *Battery optimisation…* and allow “unrestricted” battery use. On Xiaomi/Huawei/Oppo/Samsung also enable *auto-start* / *run in background* for the app in the system settings, otherwise the vendor battery manager may kill the service.
 
+## Unattended running (adb provisioning)
+
+With the phone attached by USB or `adb` over Wi-Fi (`make wifi-adb PHONE_IP=…` once, USB attached), everything below is one command each and needs no tapping on the phone:
+
+| Command | Does |
+|---|---|
+| `make dev` | build, install, provision, start |
+| `make provision` | grants camera / microphone / notification permissions, adds the app to the battery-optimisation whitelist, allows background running (`RUN_ANY_IN_BACKGROUND`), sets the standby bucket to *active*. Optional: `OVERLAY=1` (allow the overlay permission, another way to be allowed to start the camera from the background), `STAY_AWAKE=1` (screen stays on while plugged in; leave it off to test the lock screen) |
+| `make provision-status` | shows what stuck (permissions, whitelist, appops, standby bucket, whether the camera service is in the foreground) |
+| `make phone-info` | model, Android version, lock state, camera list and which app holds each camera |
+| `make lock` / `make wake` | screen off + lock / wake: the lock-screen test |
+| `make kill` / `make stop` | simulate the system killing the app / force-stop it |
+| `make watch` | babysitter: every `WATCH_SECS` (default 30) checks the camera service is in the foreground; if not, wakes the phone and starts the app. The activity is flagged `showWhenLocked`/`turnScreenOn`, so this works over a lock screen too. Leave it running in a terminal |
+| `make logs`, `make shot` | filtered logcat, phone screenshot to `build/android/screen.png` |
+
+Some makers (Xiaomi, Huawei, Oppo, Samsung) have their own battery managers that adb cannot configure: allow “unrestricted battery use” and *auto-start* for the app by hand, once. Anyone with adb access has full control of the phone: keep it to trusted machines.
+
+## Debugging and testing
+
+See the step-by-step first-session playbook and the list of unverified assumptions in [TODO.md](TODO.md).
+
 ## Layout
 ```
 android/AndroidManifest.xml  res/                 manifest (foreground service types), strings, icon
@@ -70,4 +91,4 @@ Makefile                     all build/test/install targets
 ## Status and known risks
 Verified in CI-less development: the whole app compiles against the Android 14 framework API; the protocol/library/discovery/reconnect code passes the tests above against the real hub.
 
-**Not yet verified on a device** (nothing here could be run on a phone or with the Android SDK at the time of writing): the APK packaging steps (`aapt2`/`d8`/`zipalign`/`apksigner`), Camera2 behaviour on real hardware (session fallbacks, orientation, preview transform, recording while previewing), vendor battery-manager behaviour, and Android 14 foreground-service-type enforcement. Expect to fix small things on first contact with a phone; `make logs` shows the app's errors, and the app also reports camera errors to the hub (`error` message).
+**Not yet verified on a device** (see [TODO.md](TODO.md) for the playbook) (nothing here could be run on a phone or with the Android SDK at the time of writing): the APK packaging steps (`aapt2`/`d8`/`zipalign`/`apksigner`), Camera2 behaviour on real hardware (session fallbacks, orientation, preview transform, recording while previewing), vendor battery-manager behaviour, and Android 14 foreground-service-type enforcement. Expect to fix small things on first contact with a phone; `make logs` shows the app's errors, and the app also reports camera errors to the hub (`error` message).
