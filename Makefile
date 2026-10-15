@@ -36,7 +36,11 @@ BT  ?= $(lastword $(sort $(notdir $(wildcard $(SDK)/build-tools/*))))
 BTD := $(SDK)/build-tools/$(BT)
 ANDROID_JAR := $(SDK)/platforms/android-$(API)/android.jar
 AAPT2 := $(BTD)/aapt2
-D8 := $(BTD)/d8
+# D8 comes from the R8 jar (not build-tools' d8): the one in build-tools 34 crashes (NullPointerException) on classes that javac 21+ emits
+# (MethodParameters of anonymous classes). Downloaded and checksum-verified like the other libraries.
+R8JAR := $(BUILD)/libs/r8-8.5.35.jar
+R8_SHA := 4733945987ee0a840fafc34080b135259e01678412e07212b23f706334290294
+D8 := java -cp $(R8JAR) com.android.tools.r8.D8
 ZIPALIGN := $(BTD)/zipalign
 APKSIGNER := $(BTD)/apksigner
 ifneq ($(SDK),)
@@ -78,10 +82,12 @@ $(OKIO):
 	python3 android/tools/fetch.py $(MVN)/com/squareup/okio/okio/1.17.2/okio-1.17.2.jar $@ $(OKIO_SHA)
 $(JSONJAR):
 	python3 android/tools/fetch.py $(MVN)/org/json/json/20231013/json-20231013.jar $@ $(JSON_SHA)
+$(R8JAR):
+	python3 android/tools/fetch.py https://maven.google.com/com/android/tools/r8/8.5.35/r8-8.5.35.jar $@ $(R8_SHA)
 $(STUBS):
 	python3 android/tools/fetch.py $(MVN)/org/robolectric/android-all/14-robolectric-10818077/android-all-14-robolectric-10818077.jar $@ $(STUBS_SHA)
 
-libs: $(OKHTTP) $(OKIO) $(JSONJAR)
+libs: $(OKHTTP) $(OKIO) $(JSONJAR) $(R8JAR)
 
 # ------------------------------------------------------------------ SDK
 sdk-check:
