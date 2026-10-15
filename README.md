@@ -41,6 +41,17 @@ python python/webcam_hub.py --no-tls            # implies --serve-app
 
 Trade-offs: traffic on your LAN is unencrypted (use a token on shared networks); the flag must match the hub's address, so give the PC a fixed/reserved IP; the app is served by the hub, so it isn't the GitHub Pages copy (no auto-update from Pages, and offline use depends on the hub being reachable the first time). Prefer the default HTTPS mode unless certificates are the thing you want to avoid.
 
+## Android app (runs in the background)
+
+For a real webcam that keeps going with the screen locked and no Chrome involved, there is a native Android app with the same protocol (so the hub, CLI, HTTP API and viewer work unchanged). It builds with plain `make`:
+
+```bash
+make sdk && make apk && make install     # SDK bootstrap once; the APK lands in build/android/
+make check                               # compile-check against the Android API (no SDK needed)
+make test-protocol                       # the app's real protocol code vs the real hub (no SDK/phone needed)
+```
+It runs as a foreground service (camera + microphone), finds the hub on the LAN by itself, accepts the hub's certificate on the LAN (no CA install, no Chrome flag) and also speaks plain `ws://`. See [docs/ANDROID.md](docs/ANDROID.md).
+
 ## Naming: each side selects the other by name
 
 | Name of | Set in | Used for |
@@ -169,6 +180,7 @@ curl -k "https://IP:8765/snapshot?quality=0.9" -o now.jpg      # fresh photo (al
 ## Repository layout
 
 ```
+android/  Makefile                  native Android app (foreground-service webcam) + its build and tests
 index.html style.css app.js          PWA: UI, camera, library, hub client, LAN scan
 sw.js manifest.webmanifest icons/    offline + install
 version.js                           single source of the app version (+ CI build id)

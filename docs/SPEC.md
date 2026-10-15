@@ -164,7 +164,10 @@ Status codes: 401 token, 403 not LAN, 404 no match/ambiguous camera/item, 502 er
 * Pending requests are futures keyed by `("snap"|"rec"|"lib"|"file", id)`; file transfers use a per-`(camera, req)` sink that writes to memory or to a `.part` file renamed on success.
 * `process_request` is asynchronous so HTTP routes can wait on the phone; slow viewers never block the phone (frames dropped, other messages bounded by a 5 s send timeout).
 
-## 8. Known limits
+## 8. Native Android client
+The Android app ([ANDROID.md](ANDROID.md)) is a second implementation of the phone side of this protocol (`hello` with `app: "webcam-android"`; same messages, binary frames and settings keys; extra setting `orientation`). It connects with `ws://` or `wss://` (accepting the hub's certificate for private addresses) and scans for hubs with `probe`.
+
+## 9. Known limits
 
 * The phone cannot be the server; TLS cannot be removed (§1).
 * Open by default (see Trust model). Do not expose the port to the internet.
