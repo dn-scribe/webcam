@@ -16,12 +16,14 @@ import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
 import android.os.PowerManager;
+import android.os.SystemClock;
 import android.view.OrientationEventListener;
 import io.github.dnscribe.webcam.core.Device;
 import io.github.dnscribe.webcam.core.HubFinder;
 import io.github.dnscribe.webcam.core.HubSession;
 import io.github.dnscribe.webcam.core.LibraryStore;
 import io.github.dnscribe.webcam.core.Net;
+import io.github.dnscribe.webcam.core.RecMeta;
 import java.io.File;
 import java.io.IOException;
 import java.util.List;
@@ -56,6 +58,7 @@ public class CameraService extends Service {
     private OrientationEventListener oel;
     private volatile String status = "off", statusText = "starting…", hubTitle = "", lastError = "";
     private volatile LibraryStore.Item lastRec;
+    private final RecMeta meta = new RecMeta();          // clocks and marks of the recording in progress
     private final AtomicBoolean finding = new AtomicBoolean();
     private boolean started;
     private String versionName = "0.0.0";
@@ -97,7 +100,9 @@ public class CameraService extends Service {
             public void onError(String msg) { lastError = msg; hub.notifyError(msg); fire(); }
             public void onFrame(byte[] jpeg) { hub.sendFrame(jpeg); }
             public boolean canSendFrame() { return hub.canSendFrame(); }
+            public void onRecordingStarted(long wallMs, long monoNs) { meta.started(wallMs, monoNs); hub.sendRecStatus(); }
             public void onRecordingFinished(File f, double secs, int w, int h, String error) {
+                meta.finish(f, secs);                     // the record beside the clip (nothing when the recording failed)
                 if (f != null) lastRec = lib.addVideo(f, secs, w, h); else { lastError = error; hub.notifyError(error); }
                 hub.sendRecStatus(); fire();
             }
@@ -275,15 +280,32 @@ public class CameraService extends Service {
             });
         }
 
-        @Override public String recStart() { String e = cam.startRecording(); fire(); return e; }
+        @Override public String recStart(String label) {
+            meta.begin(label);
+            String e = cam.startRecording(label);
+            if (e != null) meta.clear();
+            fire();
+            return e;
+        }
+        @Override public JSONObject mark(String text, double hostT) { return meta.mark(text, hostT, System.currentTimeMillis(), SystemClock.elapsedRealtimeNanos()); }
+        @Override public JSONObject recMeta(long id) { LibraryStore.Item it = lib.find("video", id); return it == null ? null : RecMeta.read(it.file); }
+        @Override public long monoNs() { return SystemClock.elapsedRealtimeNanos(); }
+        @Override public long wallMs() { return System.currentTimeMillis(); }
         @Override public void recStop() { cam.stopRecording(); }
 
         @Override public JSONObject recStatus() {
             JSONObject o = new JSONObject();
             try {
                 o.put("state", cam.isRecording() ? "recording" : "idle"); o.put("elapsed", cam.recElapsed()); o.put("size", cam.recBytes());
+                JSONObject live = meta.live();            // the clocks at the first frame, as soon as there is one
+                if (live != null) { o.put("start_wall_ms", live.getLong("start_wall_ms")); o.put("start_mono_ns", live.getLong("start_mono_ns")); }
                 LibraryStore.Item l = lastRec;
-                if (l != null && lib.find("video", l.id) != null) o.put("last", new JSONObject().put("id", l.id).put("size", l.size).put("name", l.name));
+                if (l != null && lib.find("video", l.id) != null) {
+                    JSONObject last = new JSONObject().put("id", l.id).put("size", l.size).put("name", l.name);
+                    JSONObject saved = RecMeta.read(l.file);
+                    if (saved != null) last.put("start_wall_ms", saved.optLong("start_wall_ms")).put("duration_ms", saved.optLong("duration_ms"));
+                    o.put("last", last);
+                }
             } catch (JSONException e) { throw new RuntimeException(e); }
             return o;
         }

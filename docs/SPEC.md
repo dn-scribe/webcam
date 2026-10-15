@@ -77,6 +77,9 @@ binary frames start with a type byte. Protocol number `proto = 1` (additive chan
 | `lib_thumb` | `kind, id, data` (data-URL or null) | reply to `lib_thumb` |
 | `lib_file_end` | `req, push, kind, id, name, mime, size, chunks` | after all `0x04` chunks |
 | `error` | `id?`/`req?`, `msg` | a command failed |
+| `clock_reply` | `id, host_t, phone_wall_ms, phone_mono_ns` | answer to `clock` |
+| `mark_ack` | `id, recording, phone_wall_ms, phone_mono_ns, rec_ms?` | `recording` false = no clip was being recorded, the mark was dropped; `rec_ms` = ms since the clip's first frame (monotonic clock) |
+| `rec_meta` | `req, id, found, meta?` | `meta`: `{name, label, started, start_wall_ms, start_mono_ns, duration_ms, marks:[{text, host_t, phone_wall_ms, phone_mono_ns, rec_ms}]}` - the phone's clocks at the first frame, so a clip can be lined up with another system's log. Android app only (written beside the clip as `<clip>.meta.json`) |
 | `pong` | | reply to `ping` |
 
 Library item: `{kind:"photo"\|"video", id, name, type, size, ts (ms), secs?, w?, h?}`. Photo ids are `ts*100+seq`; video ids are Unix seconds.
@@ -95,6 +98,10 @@ Library item: `{kind:"photo"\|"video", id, name, type, size, ts (ms), secs?, w?,
 | `lib_thumb` | `kind, id` |
 | `lib_delete` | `items:[{kind,id}]` (no confirmation) |
 | `get_state`, `ping` | |
+| `clock` | `id, host_t` -> phone answers `clock_reply` at once (3.2). The hub repeats it, keeps the shortest round trip and derives the phone's offset |
+| `mark` | `id, text, host_t`: an annotation kept with the recording in progress -> `mark_ack` |
+| `rec` `start` | optional `label` (letters, digits, `_.-`, <= 40): goes into the clip's file name `rec-<stamp>-<label>.mp4` |
+| `rec_meta` | `req, id` -> `rec_meta` (3.2): the record kept beside a finished clip |
 
 ### 3.4 Binary (phone → hub)
 | Byte 0 | Layout | Relayed to viewers |
@@ -127,6 +134,10 @@ All camera routes accept `?camera=NAME` (default: `use()` camera, or the only on
 | `GET /files/<kind>/<id>`, `/files/latest[?kind=]` | one file; `&download=1` → `Content-Disposition: attachment` |
 | `GET /files.zip[?kind=\|?items=photo:ID,video:ID]` | stored (uncompressed) ZIP; duplicate names get `-<id>` |
 | `GET /snapshot[?quality=]` | fresh JPEG (also saved on the phone) |
+| `GET /rec?action=start\|stop[&label=]` | start / stop a clip on the phone (GET because the hub's HTTP layer only parses GET) |
+| `GET /mark?text=` | an annotation for the recording in progress -> the phone's `mark_ack` |
+| `GET /clock[?n=8]` | `{offset_ms (phone - hub), rtt_ms, samples, hub_t, phone_mono_ns}`; the error is at most rtt/2 |
+| `GET /rec_meta[?id=]` | `rec_meta` of a finished clip (default: the last) |
 | other | PWA files if `--serve-app`, else 404 |
 
 Status codes: 401 token, 403 not LAN, 404 no match/ambiguous camera/item, 502 error, 503 no camera, 504 phone timeout.

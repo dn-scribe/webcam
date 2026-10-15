@@ -27,6 +27,7 @@ public class Harness {
     static class Fake implements Device {
         final LibraryStore lib; JSONObject settings = new JSONObject(); volatile boolean streaming; volatile int sfps = 10;
         volatile boolean recording; long recStart; File recFile; LibraryStore.Item last; HubSession session; int seed;
+        final RecMeta meta = new RecMeta(); volatile long clockSkewMs = 0;        // the fake phone's clock runs clockSkewMs ahead of the PC
         Fake(LibraryStore lib) throws Exception {
             this.lib = lib;
             settings.put("facing", "environment"); settings.put("res", "1280x720"); settings.put("aspect", "native"); settings.put("fps", 30);
@@ -56,11 +57,21 @@ public class Harness {
             try { byte[] j = jpeg(640, 360, ++seed); lib.addPhoto(j, 640, 360); cb.done(j, 640, 360, null); session.notifyLibrary(false); }
             catch (Exception e) { cb.done(null, 0, 0, e.toString()); }
         }
-        public String recStart() { if (recording) return "already recording"; recording = true; recStart = System.currentTimeMillis(); recFile = lib.newVideoFile("mp4"); return null; }
+        public String recStart(String label) {
+            if (recording) return "already recording";
+            recording = true; recStart = System.currentTimeMillis(); recFile = lib.newVideoFile("mp4", label);
+            meta.begin(label); meta.started(System.currentTimeMillis() + clockSkewMs, System.nanoTime());
+            return null;
+        }
+        public JSONObject mark(String text, double hostT) { return meta.mark(text, hostT, System.currentTimeMillis() + clockSkewMs, System.nanoTime()); }
+        public JSONObject recMeta(long id) { LibraryStore.Item it = lib.find("video", id); return it == null ? null : RecMeta.read(it.file); }
+        public long monoNs() { return System.nanoTime(); }
+        public long wallMs() { return System.currentTimeMillis() + clockSkewMs; }
         public void recStop() {
             if (!recording) return;
             try { byte[] b = new byte[700_000]; new Random(7).nextBytes(b); Files.write(recFile.toPath(), b); } catch (Exception e) { throw new RuntimeException(e); }
-            recording = false; last = lib.addVideo(recFile, (System.currentTimeMillis() - recStart) / 1000.0, 1280, 720);
+            recording = false; meta.finish(recFile, (System.currentTimeMillis() - recStart) / 1000.0);
+            last = lib.addVideo(recFile, (System.currentTimeMillis() - recStart) / 1000.0, 1280, 720);
             session.sendRecStatus(); session.notifyLibrary(false);
         }
         public JSONObject recStatus() {
@@ -104,6 +115,7 @@ public class Harness {
         String line;
         while ((line = in.readLine()) != null) {
             if (line.equals("quit")) break;
+            if (line.startsWith("skew ")) { dev.clockSkewMs = Long.parseLong(line.substring(5).trim()); System.out.println("SKEW " + dev.clockSkewMs); System.out.flush(); }
             if (line.equals("push")) { List<LibraryStore.Item> l = lib.list(); if (!l.isEmpty()) s.pushToHub(l.get(0)); System.out.println("PUSHING " + (l.isEmpty() ? "-" : l.get(0).name)); System.out.flush(); }
         }
         s.shutdown(); System.exit(0);

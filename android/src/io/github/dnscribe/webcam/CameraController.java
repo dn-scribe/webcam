@@ -56,6 +56,8 @@ public final class CameraController {
         void onFrame(byte[] jpeg);
         boolean canSendFrame();
         void onRecordingFinished(File f, double secs, int w, int h, String error);
+        /** The recorder delivered its first frame: the wall clock and the monotonic clock at that moment. */
+        void onRecordingStarted(long wallMs, long monoNs);
     }
 
     private static final class Waiter { final Device.SnapCallback cb; final double q; Waiter(Device.SnapCallback c, double q) { cb = c; this.q = q; } }
@@ -347,7 +349,7 @@ public final class CameraController {
                     session = s;
                     startRepeating();
                     if (recording && !recStarted && recorder != null) {
-                        try { recorder.start(); recStarted = true; recT0 = SystemClock.elapsedRealtime(); }
+                        try { long wall = System.currentTimeMillis(), mono = SystemClock.elapsedRealtimeNanos(); recorder.start(); recStarted = true; recT0 = SystemClock.elapsedRealtime(); cb.onRecordingStarted(wall, mono); }
                         catch (Exception e) { failRecording("cannot start recorder: " + e.getMessage()); }
                     }
                     cb.onChanged();
@@ -571,18 +573,18 @@ public final class CameraController {
     }
 
     /** Returns an error message or null (recording starts asynchronously once the new session is configured). */
-    public String startRecording() {
-        FutureTask<String> t = new FutureTask<>(new java.util.concurrent.Callable<String>() { public String call() { return doStartRecording(); } });
+    public String startRecording(final String label) {
+        FutureTask<String> t = new FutureTask<>(new java.util.concurrent.Callable<String>() { public String call() { return doStartRecording(label); } });
         h.post(t);
         try { return t.get(8, TimeUnit.SECONDS); } catch (Exception e) { return "recorder busy: " + e; }
     }
 
-    private String doStartRecording() {
+    private String doStartRecording(String label) {
         if (recording) return "already recording";
         if (dev == null || vidSize == null) return "camera not ready";
         MediaRecorder r = new MediaRecorder();
         try {
-            recFile = lib.newVideoFile("mp4");
+            recFile = lib.newVideoFile("mp4", label);
             boolean audio = prefs.bool("audio") && ctx.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED;
             if (audio) r.setAudioSource(MediaRecorder.AudioSource.MIC);
             r.setVideoSource(MediaRecorder.VideoSource.SURFACE);
