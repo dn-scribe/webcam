@@ -37,7 +37,7 @@ function download(blob, name) {
 }
 
 // ---------- camera ----------
-let stream = null, track = null, caps = {}, devices = [];
+let recDiag = null, stream = null, track = null, caps = {}, devices = [];
 
 async function startCamera() {
   stopCamera();
@@ -221,7 +221,10 @@ function startRec() {
   recSize = 0; recWrites = []; recMem = []; recId = Math.floor(Date.now() / 1000);
   const id = recId; let idx = 0;
   recorder = new MediaRecorder(stream, { ...(mime && { mimeType: mime }), videoBitsPerSecond: BITRATES[S.bitrate] || BITRATES.medium, audioBitsPerSecond: 96000 });
+  recDiag = { mime: recorder.mimeType || mime, req: mime, tracks: stream.getTracks().map((t) => `${t.kind}:${t.readyState}${t.muted ? ':muted' : ''}`), events: 0, err: null };
+  recorder.onerror = (e) => { recDiag.err = String((e.error && (e.error.name + ': ' + e.error.message)) || e.type); reportRec(); };
   recorder.ondataavailable = (e) => {
+    recDiag.events++;
     if (!e.data.size) return;
     recSize += e.data.size; const i = idx++;
     recWrites.push(idb.put('chunks', { rec: id, idx: i, blob: e.data }).catch(() => recMem.push({ rec: id, idx: i, blob: e.data })));
@@ -252,7 +255,7 @@ function recUI() {
   ['selDevice', 'selRes', 'selFps', 'chkAudio', 'btnFlip', 'selBitrate', 'selCodec'].forEach((i) => ($('#' + i).disabled = on));
 }
 function reportRec() { sendJSON({ t: 'rec_status', ...recStatus() }); }
-const recStatus = () => ({ state: recorder ? 'recording' : 'idle', elapsed: recorder ? (Date.now() - recStart) / 1000 : 0, size: recSize, last: lastRec && { id: lastRec.id, size: lastRec.size, name: lastRec.name } });
+const recStatus = () => ({ diag: recDiag, state: recorder ? 'recording' : 'idle', elapsed: recorder ? (Date.now() - recStart) / 1000 : 0, size: recSize, last: lastRec && { id: lastRec.id, size: lastRec.size, name: lastRec.name } });
 const blobOf = (meta) => (meta.mem ? Promise.resolve(meta.mem) : recBlob(meta));
 async function sendRecording(id) {
   const meta = recs.find((r) => r.id === id) || lastRec;
