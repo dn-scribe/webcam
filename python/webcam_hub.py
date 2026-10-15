@@ -812,7 +812,12 @@ class Hub:
             self._waiters.pop(("mark", mid), None)
 
     async def _ameta(self, cam, rec_id=None, timeout=10):
-        rid = rec_id if rec_id is not None else self._last_rec_id(cam)
+        rid = rec_id
+        for _ in range(50):                  # the phone's rec_status with the new clip follows the stop by a moment
+            rid = rec_id if rec_id is not None else self._last_rec_id(cam)
+            if rid is not None or rec_id is not None:
+                break
+            await asyncio.sleep(0.1)
         if rid is None:
             raise LookupError("no finished recording to describe")
         req = self._rid()
