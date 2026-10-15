@@ -1,20 +1,60 @@
 # IP Webcam — phone camera on your LAN, driven from Python
 
-Turn an Android phone into a LAN camera with **nothing but a web page**, and control it from a Python app, a browser, `curl` or the command line: live view, camera settings, snapshots, recording, and downloading what the phone has saved. Installable as a PWA and fully offline (no internet needed after the first load).
+Turn an Android phone into a LAN camera and control it from a Python app, a browser, `curl` or the command line: live view, camera settings, snapshots, recording, and downloading what the phone has saved. One Python **hub**, two interchangeable phone clients:
 
-* **App (open on the phone):** https://dn-scribe.github.io/webcam/
-* **Protocol & design details:** [docs/SPEC.md](docs/SPEC.md)
+* **Web app (PWA)**: just a web page, nothing to build, installable and fully offline after the first load. Open it on the phone: https://dn-scribe.github.io/webcam/
+* **Android app** (native Java, `android/`): a real background webcam that keeps running with the screen locked. See [Which phone client should I use?](#which-phone-client-should-i-use)
+* **Protocol & design details:** [docs/SPEC.md](docs/SPEC.md) · **Android app:** [docs/ANDROID.md](docs/ANDROID.md)
 
 ## How it works
 
 ```
- Python hub  (listens on a port, has a name)  <──── wss://  ────  Phone PWA (camera, connects out)
-      │  Python API · CLI · HTTP API · browser viewer
+ Python hub  (listens on a port, has a name)  <──── wss:// (or ws://) ────  Phone: web app (PWA) or Android app
+      │  Python API · CLI · HTTP API · browser viewer                      (camera, connects out)
 ```
 
-A web page can't listen on a port, so the roles are inverted: the **hub** (`python/webcam_hub.py`) listens, and each phone connects *out* to it and becomes a named **camera**. TLS can't be dropped: the browser only allows camera access, and a page served over HTTPS may only open `wss://` sockets. Everything else is optional — **no token and no pairing by default**.
+A web page can't listen on a port (and the Android app follows the same design), so the roles are inverted: the **hub** (`python/webcam_hub.py`) listens, and each phone connects *out* to it and becomes a named **camera**. For the web app TLS can't be dropped: the browser only allows camera access over HTTPS, and a page served over HTTPS may only open `wss://` sockets (the Android app has no such limit). Everything else is optional — **no token and no pairing by default**.
 
-## Quick start
+## Which phone client should I use?
+
+The hub is the same for both; pick the client per phone. The Android app and the web app can even be mixed on one hub.
+
+| | **Web app (PWA)** | **Android app** (native Java) |
+|---|---|---|
+| **Use it when** | You want to try it now, or the phone is just a temporary camera, or it isn't Android | The phone is a permanent / unattended webcam |
+| **Install** | Open https://dn-scribe.github.io/webcam/ → *Install app*. Nothing to build | Build an APK with `make` (JDK 17 + Android SDK downloaded by `make sdk`) and install over `adb` |
+| **Keeps running with the screen off / in the background** | **No**: the browser suspends the page (it holds a screen wake lock, so keep it open and awake) | **Yes**: foreground service, wake + Wi-Fi locks, notification with *Stop* |
+| **Connecting to the hub** | Needs the hub's CA installed, or accept the certificate warning once, or the `--no-tls` plus Chrome-flag route | Accepts the hub certificate on the LAN; plain `ws://` also works; nothing to install on the phone |
+| **Finding the hub** | LAN scan, only with the CA trusted; otherwise type the address | LAN scan always works (re-finds the hub if its IP changes) |
+| **Updates** | Automatic from GitHub Pages (service worker); works offline after the first load | Rebuild and `make install`; version number shared with the web app |
+| **Photos** | `ImageCapture` / video frame, cropped to the chosen aspect | Camera2 JPEG at full sensor size, cropped to the chosen aspect; while recording, from stream frames |
+| **Clips** | H.264 mp4 or VP9 webm, bitrate 1–10 Mbps; cropped to the aspect in software | H.264 (or H.265); uses the nearest aspect the camera encodes natively (no software crop); `codec: vp9` ignored |
+| **Camera controls** | Whatever the browser exposes (zoom, torch, exposure, focus, white balance…) | Zoom, torch, exposure compensation, plus orientation; fewer than the browser-exposed set |
+| **Needs** | Chrome (or a Chromium browser) on the phone; the camera needs HTTPS or `localhost` | Android 8.0+ |
+| **Maturity** | Used on a Samsung Galaxy A14 against the hub: snapshot, live stream and recording verified | Compiles; protocol code tested against the hub; **not yet run on a phone** |
+
+Details: [web app features](#the-web-app-pwa) · [Android app](docs/ANDROID.md) · [protocol](docs/SPEC.md).
+
+## Quick start: Android app (background webcam)
+
+A native app with the same protocol, so the hub, CLI, HTTP API and viewer work unchanged. It keeps streaming with the screen locked and other apps in front, and needs no Chrome, no CA install and no Chrome flag. Builds with plain `make` (JDK 17+, python3, internet for the first build); requires Android 8.0+ (API 26).
+
+```bash
+pip install -r python/requirements.txt
+python python/webcam_hub.py --open       # 1. start the hub (terminal 1)
+
+make sdk                                 # 2. once: Android command-line tools + platform 34 + build-tools
+make dev                                 #    build + install + provision (permissions, battery whitelist, background appops) + start   [ADB_FLAGS="-s SERIAL"]
+make watch                               #    optional babysitter: restarts the app from the PC if the camera service goes away
+make phone-info logs shot lock wake kill #    debugging helpers (see `make help`)
+make check                               #    compile-check against the Android API (no SDK needed)
+make test-protocol                       #    the app's real protocol code vs the real hub (no SDK/phone needed)
+```
+The phone finds the hub on the LAN by itself and accepts the hub's certificate there (plain `ws://` works too). For unattended use: plug it in, run `make provision`, allow “unrestricted battery use” in the phone's settings, and optionally leave `make watch` running.
+
+**Status:** the app compiles and its protocol code is tested against the hub, but it has **not been run on a phone yet**; the web app below is the one verified on a device. The first on-device session, the known risks and the roadmap are in [docs/TODO.md](docs/TODO.md); details in [docs/ANDROID.md](docs/ANDROID.md).
+
+## Quick start: web app (PWA)
 
 ```bash
 pip install -r python/requirements.txt
@@ -41,22 +81,6 @@ python python/webcam_hub.py --no-tls            # implies --serve-app
 
 Trade-offs: traffic on your LAN is unencrypted (use a token on shared networks); the flag must match the hub's address, so give the PC a fixed/reserved IP; the app is served by the hub, so it isn't the GitHub Pages copy (no auto-update from Pages, and offline use depends on the hub being reachable the first time). Prefer the default HTTPS mode unless certificates are the thing you want to avoid.
 
-## Android app (runs in the background)
-
-For a real webcam that keeps going with the screen locked and no Chrome involved there is a native Android app with the same protocol, so the hub, CLI, HTTP API and viewer work unchanged. It builds with plain `make` (JDK 17+, python3, internet for the first build):
-
-```bash
-make sdk                 # once: Android command-line tools + platform 34 + build-tools
-make dev                 # build + install + provision (permissions, battery whitelist, background appops) + start   [ADB_FLAGS="-s SERIAL"]
-make watch               # optional babysitter: restarts the app from the PC if the camera service goes away
-make phone-info logs shot lock wake kill    # debugging helpers (see `make help`)
-make check               # compile-check against the Android API (no SDK needed)
-make test-protocol       # the app's real protocol code vs the real hub (no SDK/phone needed)
-```
-It runs as a foreground service (camera + microphone) with wake and Wi-Fi locks, finds the hub on the LAN by itself, accepts the hub's certificate on the LAN (no CA install, no Chrome flag) and also speaks plain `ws://`. For unattended use: plug it in, run `make provision`, allow “unrestricted battery use” in the phone's settings, and optionally leave `make watch` running.
-
-**Status: the app compiles and its protocol code is tested against the hub, but it has not been run on a phone yet.** The first on-device session, the known risks and the roadmap are in [docs/TODO.md](docs/TODO.md); details in [docs/ANDROID.md](docs/ANDROID.md).
-
 ## Naming: each side selects the other by name
 
 | Name of | Set in | Used for |
@@ -64,7 +88,7 @@ It runs as a foreground service (camera + microphone) with wake and Wi-Fi locks,
 | **Hub** | `--name office` (default: host name), `Hub(name=…)` | The phone's **Hub name** field picks the hub among several on the LAN (exact / substring / glob, e.g. `lab*`) and re-finds it if its IP changes. Shown in the app status bar and viewer header; carried in the connect link (`&hubname=`) |
 | **Camera** (phone) | **Camera name** in the app (default `cam-xxxx`) | Python/CLI/HTTP/viewer pick a camera by name (exact, case-insensitive, substring or glob). Duplicate names get `-2`, `-3`… |
 
-## The phone app
+## The web app (PWA)
 
 * **Camera screen (default):** the live view takes all the space that is left and the immediate controls are docked around it — status and ⚙ along the top; **Flip · Snap · Record · Download** in a row below the view (a column on the right in landscape); a one-line strip with zoom / torch / exposure / focus next to them. **Pinch the view to zoom.** ⛶ toggles browser full screen. Everything else (connection, camera settings, library, app) is in the ⚙ settings sheet, which opens by itself on first run.
 * **Floating layout (optional):** *⚙ → App → Controls → Floating* lets you drag the toolbar and quick panel anywhere over the video and rotate them; positions are remembered (*Reset floating layout*).
@@ -171,12 +195,13 @@ curl -k "https://IP:8765/snapshot?quality=0.9" -o now.jpg      # fresh photo (al
 | `LookupError: several cameras connected` | Pass `camera="name"` or call `hub.use("name")` |
 | Preview looked wider/narrower than the saved picture | Fixed in v0.7.3: the preview now shows exactly the output frame. Pick the *Aspect ratio* you want in *Camera settings*; the old "Fill" preview option was removed because it cropped the preview but not the photo |
 | Photos are small (e.g. 480×640) | Snapshots are saved at whatever the camera delivers: check *Camera settings → Resolution* / *Photo size* (set *Maximum*); the app toasts "Camera delivers … below the … requested" when Android ignores the request, and the library caption shows each photo's pixel size. Browsers without `ImageCapture` fall back to a video frame, which is limited by the video resolution. Live-view frames (`latest_frame`, CLI `frame`) are deliberately small (stream width) — use `snapshot()` for full size |
+| Web app: live view or recordings stay empty, screen dimmed with “Accidental touch protection” (Samsung) | The phone thinks it is in a pocket (proximity sensor covered, e.g. lying face-down or against a wall), so the page gets no camera frames. Uncover the sensor, or turn the setting off (*Settings → Display → Accidental touch protection*; over adb: `settings put system screen_off_pocket 0`). The recorder's state, track status and errors are in the camera's `recording.diag` (`state` in the hub) |
 | Update not showing on the phone | *App → Update / clear cache* (needs the page reachable once) |
 | Certificate rejected after the hub's IP changed | Restart the hub: it issues a new leaf certificate for the new IP; the installed CA stays valid |
 
 ## Limits
 
-* The phone can't be the server (browser limitation) and TLS can't be removed (camera access requires HTTPS).
+* The phone can't be the server, and for the web app TLS can't be removed (browser camera access requires HTTPS or `localhost`).
 * A clip opened in the viewer, a ZIP, or an HTTP download is first fetched from the phone into the hub's memory; very large clips use that much RAM there (the Python API and `--pull` write straight to disk).
 * Video is JPEG-per-frame for live view (simple, robust, bandwidth-heavy at high fps); recordings use the phone's H.264/VP9 encoder.
 * Android may throttle the page when the screen is off; the app holds a screen wake lock while open.
